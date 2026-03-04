@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "name": "DEMO_KC_WLAN_5G_UNII_LMH",
+  "ruleset_id": "KC_WLAN",
+  "ruleset_version": "2026.02",
+  "selection": {
+    "band": "5G",
+    "standard": "802.11ac",
+    "plan_mode": "DEMO",
+    "test_types": ["PSD", "OBW", "SP", "RX"],
+    "bandwidth_mhz": [20, 80],
+    "channels": {
+      "policy": "CUSTOM_LIST",
+      "channels": [36, 100, 149]
+    },
+    "execution_policy": {
+      "type": "CHANNEL_CENTRIC",
+      "test_order": ["PSD", "OBW", "SP", "RX"],
+      "include_bw_in_group": true
+    }
+  },
+  "description": "KC WLAN 5G demo preset (UNII sample channels, BW20/80)"
+}

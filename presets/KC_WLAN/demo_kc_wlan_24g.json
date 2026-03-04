@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "name": "DEMO_KC_WLAN_24G_BGN",
+  "ruleset_id": "KC_WLAN",
+  "ruleset_version": "2026.02",
+  "selection": {
+    "band": "2.4G",
+    "standard": "802.11n",
+    "plan_mode": "DEMO",
+    "test_types": ["PSD", "OBW", "SP", "RX"],
+    "bandwidth_mhz": [20],
+    "channels": {
+      "policy": "CUSTOM_LIST",
+      "channels": [1, 6, 11]
+    },
+    "execution_policy": {
+      "type": "CHANNEL_CENTRIC",
+      "test_order": ["PSD", "OBW", "SP", "RX"],
+      "include_bw_in_group": true
+    }
+  },
+  "description": "KC WLAN 2.4G demo preset (CH 1/6/11, BW20)"
+}
