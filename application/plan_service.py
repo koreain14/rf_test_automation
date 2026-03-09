@@ -10,6 +10,8 @@ from domain.overrides import apply_overrides
 from infrastructure.plan_repo_sqlite import PlanRepositorySQLite
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
 from application.migrations_preset import migrate_preset_to_latest
+from domain.ruleset_models import BandInfo, PlanMode  # 경로는 너 프로젝트에 맞게
+from dataclasses import dataclass
 
 
 
@@ -22,15 +24,13 @@ class PlanService:
         self._ruleset_cache: Dict[str, RuleSet] = {}
 
     # ---------- RuleSet ----------
+
     def load_ruleset(self, ruleset_id: str) -> RuleSet:
         if ruleset_id in self._ruleset_cache:
             return self._ruleset_cache[ruleset_id]
 
         path = self.ruleset_dir / f"{ruleset_id.lower()}.json"
-        # 규칙: 파일명은 kc_wlan.json 처럼 저장해두고, id=KC_WLAN에 매핑
-        # 여기서는 kc_wlan.json만 대상으로 간단 매핑
         if not path.exists():
-            # fallback: 직접 kc_wlan.json 찾기
             alt = self.ruleset_dir / "kc_wlan.json"
             if alt.exists() and ruleset_id == "KC_WLAN":
                 path = alt
@@ -38,23 +38,34 @@ class PlanService:
                 raise FileNotFoundError(f"RuleSet json not found for {ruleset_id}")
 
         raw = json.loads(path.read_text(encoding="utf-8"))
+
+        # ✅ instrument_profiles: 기존 유지
         ips = {
             name: InstrumentProfile(name=name, settings=settings)
-            for name, settings in raw.get("instrument_profiles", {}).items()
+            for name, settings in (raw.get("instrument_profiles", {}) or {}).items()
         }
+
+        # ✅ bands: dict -> BandInfo 객체로 정규화
+        bands_raw: Dict[str, dict] = raw.get("bands", {}) or {}
+        bands = {band_name: BandInfo.from_dict(band_name, band_dict) for band_name, band_dict in bands_raw.items()}
+
+        # ✅ plan_modes: dict -> PlanMode 객체로 정규화
+        pm_raw: Dict[str, dict] = raw.get("plan_modes", {}) or {}
+        plan_modes = {mode_name: PlanMode.from_dict(mode_name, mode_dict) for mode_name, mode_dict in pm_raw.items()}
 
         rs = RuleSet(
             id=raw["id"],
-            version=raw["version"],
-            regulation=raw["regulation"],
-            tech=raw["tech"],
-            bands=raw["bands"],
+            version=raw.get("version", ""),
+            regulation=raw.get("regulation", ""),
+            tech=raw.get("tech", ""),
+            bands=bands,                    # <- 변경됨 (BandInfo dict)
             instrument_profiles=ips,
-            plan_modes=raw.get("plan_modes", {}),
+            plan_modes=plan_modes,          # <- 변경됨 (PlanMode dict)
         )
+
         self._ruleset_cache[ruleset_id] = rs
         return rs
-
+    
     # ---------- Project/Preset ----------
     def list_projects(self) -> List[Dict[str, Any]]:
         return self.repo.list_projects()
@@ -110,36 +121,7 @@ class PlanService:
     def list_presets(self, project_id: str) -> List[Dict[str, Any]]:
         return self.repo.list_presets(project_id)
 
-    def load_preset_obj(self, preset_id: str) -> Preset:
-        pj = self.repo.load_preset(preset_id)
-
-        # 구 포맷(=selection만 저장) 하위호환
-        if "selection" not in pj:
-            selection = dict(pj)
-            name = selection.get("name") or "UnnamedPreset"
-            ruleset_id = selection.get("ruleset_id") or "KC_WLAN"
-            ruleset_version = selection.get("ruleset_version") or "2026.02"
-            desc = selection.get("description", "")
-
-            selection.pop("name", None)
-            selection.pop("ruleset_id", None)
-            selection.pop("ruleset_version", None)
-            selection.pop("description", None)
-        else:
-            selection = pj["selection"]
-            name = pj.get("name") or "UnnamedPreset"
-            ruleset_id = pj.get("ruleset_id") or selection.get("ruleset_id") or "KC_WLAN"
-            ruleset_version = pj.get("ruleset_version") or selection.get("ruleset_version") or "2026.02"
-            desc = pj.get("description", "")
-
-        return Preset(
-            name=name,
-            ruleset_id=ruleset_id,
-            ruleset_version=ruleset_version,
-            selection=selection,
-            description=desc,
-        )
-
+   
     def load_override_objs(self, preset_id: str) -> List[OverrideRule]:
         rows = self.repo.list_overrides(preset_id)
         out: List[OverrideRule] = []
@@ -169,30 +151,19 @@ class PlanService:
         return out
 
     # ---------- Recipe/Cases ----------
-    def build_recipe_from_preset(self, preset_id: str) -> Tuple[RuleSet, Preset, Recipe, List[OverrideRule]]:
-        """
-        preset_id로부터 (ruleset, preset, recipe, overrides)를 구성합니다.
+    from typing import Tuple, List
 
-        ⚠️ 주의:
-        - validate는 preset/ruleset을 모두 로드한 이후에 호출해야 합니다.
-        - 이 함수의 반환값은 UI의 PlanContext에 그대로 들어가므로,
-          여기서 실패하면 Add Plan에서 에러가 발생합니다.
-        """
-        # 1) preset 로드
+    def build_recipe_from_preset(self, preset_id: str):
         preset = self.load_preset_obj(preset_id)
+        if preset is None:
+            raise KeyError(f"Preset not found: {preset_id}")
 
-        # 2) ruleset 로드 (preset이 어떤 규격을 참조하는지 기반)
-        ruleset = self.load_ruleset(preset.ruleset_id)
+        ruleset = self.load_ruleset(preset.ruleset_id)  # 이제 RuleSet 객체로 확정
 
-        # 3) preset ↔ ruleset 정합성 검증
         self.validate_preset_against_ruleset(preset, ruleset)
 
-        # 4) recipe 생성(=selection을 실제 케이스 생성 규칙으로 변환)
         recipe = build_recipe(ruleset, preset)
-
-        # 5) overrides 로드(=UI에서 만든 예외/skip/파라미터 변경 규칙)
-        overrides = self.load_override_objs(preset_id)
-
+        overrides = self.load_override_objs(preset_id) or []
         return ruleset, preset, recipe, overrides
 
     def iter_cases(
@@ -201,16 +172,9 @@ class PlanService:
         recipe: Recipe,
         overrides: List[OverrideRule],
         filter_: Optional[Dict[str, Any]] = None,
-        show_disabled: bool = False,
     ):
         cases = expand_recipe(ruleset, recipe)
-        # show_disabled=True이면 skip override에 의해 제거되는 케이스도 화면에 표시하기 위해
-        # skip 대신 tags['_disabled']=True로 마킹하여 그대로 반환합니다.
-        if show_disabled:
-            from domain.overrides import apply_overrides_mark_disabled
-            cases = apply_overrides_mark_disabled(cases, overrides)
-        else:
-            cases = apply_overrides(cases, overrides)
+        cases = apply_overrides(cases, overrides)
 
         if not filter_:
             yield from cases
@@ -224,7 +188,18 @@ class PlanService:
                 ok = False
             if ok:
                 yield c
-
+                
+    def count_cases(self, ruleset, recipe, overrides, filter_=None) -> int:
+        count = 0
+        for _ in self.iter_cases(
+            ruleset=ruleset,
+            recipe=recipe,
+            overrides=overrides,
+            filter_=filter_,
+        ):
+            count += 1
+        return count
+    
     def get_cases_page(
         self,
         ruleset: RuleSet,
@@ -233,14 +208,13 @@ class PlanService:
         filter_: Optional[Dict[str, Any]],
         offset: int,
         limit: int,
-        show_disabled: bool = False,
     ) -> List[TestCase]:
         """
         MVP용 단순 페이징: iterator를 offset+limit까지 소비.
         (나중에 대규모 최적화는 별도 캐시/인덱싱으로 개선)
         """
         out: List[TestCase] = []
-        it = self.iter_cases(ruleset, recipe, overrides, filter_, show_disabled=show_disabled)
+        it = self.iter_cases(ruleset, recipe, overrides, filter_)
         i = 0
         for c in it:
             if i >= offset and len(out) < limit:
@@ -249,7 +223,9 @@ class PlanService:
             if len(out) >= limit:
                 break
         return out
-
+    
+   
+  
     # ---------- Override helpers ----------
     def create_skip_override_for_case(
         self,
@@ -322,91 +298,6 @@ class PlanService:
             enabled=True
         )
         
-    
-    # ---------- Scenario Plan enable/disable ----------
-    def disable_selected_cases(
-        self,
-        project_id: str,
-        preset_id: str,
-        cases: List[TestCase],
-        priority: int = 100,
-    ) -> List[str]:
-        """
-        선택된 케이스를 '비활성화(Disable)' 합니다.
-
-        구현 방식(현재 MVP):
-        - overrides 테이블에 action='skip' 규칙을 추가하여 해당 케이스가 expand 결과에서 제거되도록 함.
-        - UI에서는 기본적으로 제거된 케이스는 보이지 않으며,
-          'Show Disabled' 옵션을 켜면 tags['_disabled']=True로 표시된 상태로 다시 볼 수 있음.
-
-        반환: 생성된 override_id 목록
-        """
-        if not cases:
-            return []
-
-        ids: List[str] = []
-        # 가능하면 channels 묶음(skip selection)으로 1개 규칙으로 줄이고,
-        # 조건이 섞여있으면 케이스별로 생성합니다.
-        try:
-            oid = self.create_skip_override_for_selection(project_id, preset_id, cases, priority=priority)
-            ids.append(oid)
-        except Exception:
-            for c in cases:
-                ids.append(self.create_skip_override_for_case(project_id, preset_id, c, priority=priority))
-        return ids
-
-    def enable_selected_cases(
-        self,
-        preset_id: str,
-        cases: List[TestCase],
-    ) -> int:
-        """
-        선택된 케이스를 다시 '활성화(Enable)' 합니다.
-
-        구현 방식:
-        - preset_id에 연결된 overrides 중 action='skip'이며
-          match가 선택된 케이스(또는 channels 포함 규칙)에 매칭되는 rule을 찾아 enabled=False로 변경
-        - hard delete 대신 enabled 플래그를 끄는 이유:
-          나중에 어떤 케이스를 왜 제외했는지 추적(Traceability) 하기 위해.
-
-        반환: 비활성화(disable)된 override 개수
-        """
-        if not cases:
-            return 0
-
-        # 선택 케이스를 빠르게 매칭하기 위한 key set
-        case_keys = {(c.band, c.standard, c.test_type, c.channel, c.bw_mhz) for c in cases}
-
-        rows = self.repo.list_overrides(preset_id)
-        hit = 0
-        for r in rows:
-            j = r.get("json_data") or {}
-            if j.get("action") != "skip":
-                continue
-            m = (j.get("match") or {})
-            band = m.get("band")
-            std = m.get("standard")
-            tt = m.get("test_type")
-            bw = m.get("bw_mhz")
-
-            # 1) 단일 channel 매칭
-            ch = m.get("channel")
-            if ch is not None:
-                if (band, std, tt, int(ch), int(bw)) in case_keys:
-                    self.repo.update_override_enabled(r["override_id"], False)
-                    hit += 1
-                continue
-
-            # 2) channels 리스트 매칭(그룹 skip)
-            chs = m.get("channels")
-            if chs:
-                for ch2 in chs:
-                    if (band, std, tt, int(ch2), int(bw)) in case_keys:
-                        self.repo.update_override_enabled(r["override_id"], False)
-                        hit += 1
-                        break
-        return hit
-
     def create_rerun_preset_from_fail(self, project_id: str, base_preset_id: str, run_id: str) -> str:
         base = self.repo.load_preset(base_preset_id)
         failed = self.run_repo.get_failed_cases(project_id, run_id)
@@ -548,74 +439,81 @@ class PlanService:
             description=migrated.get("description", ""),
     )
         
-    def validate_preset_against_ruleset(self, preset, ruleset) -> None:
-        """
-        preset.selection 과 ruleset 내용을 비교해서
-        - band 존재 여부
-        - standard 지원 여부
-        - test_types 지원 여부
-        등을 검증한다.
-
-        ✅ ruleset이 dict 기반이든, 객체(dataclass) 기반이든 모두 동작하도록 방어적으로 작성.
-        """
-        sel = preset.selection or {}
-
+    def validate_preset_against_ruleset(self, preset: Preset, ruleset: RuleSet) -> None:
+        sel = preset.selection
         band = sel.get("band")
         standard = sel.get("standard")
         test_types = sel.get("test_types", [])
         channels = sel.get("channels", {})
 
-        if not band:
-            raise ValueError("Preset selection is missing 'band'.")
-        if not standard:
-            raise ValueError("Preset selection is missing 'standard'.")
-        if not isinstance(test_types, list) or not test_types:
-            raise ValueError("Preset selection 'test_types' must be a non-empty list.")
+        if band not in ruleset.bands:
+            raise ValueError(f"Band '{band}' is not defined in RuleSet. Available: {list(ruleset.bands.keys())}")
 
-        # --- ruleset.bands 가져오기 (dict/object 모두 지원) ---
-        bands = getattr(ruleset, "bands", None)
-        if bands is None:
-            # ruleset 자체가 dict일 수도 있음
-            if isinstance(ruleset, dict):
-                bands = ruleset.get("bands", {})
-            else:
-                raise ValueError("Invalid ruleset: missing 'bands'")
+        band_info = ruleset.bands[band]
 
-        if band not in bands:
-            # dict일 수도 있고 object일 수도 있으니 keys()를 안전하게
-            try:
-                available = list(bands.keys())
-            except Exception:
-                available = []
-            raise ValueError(f"Band '{band}' is not defined in RuleSet. Available: {available}")
+        if standard not in band_info.standards:
+            raise ValueError(f"Standard '{standard}' not supported in band '{band}'. Supported: {band_info.standards}")
 
-        band_info = bands[band]
-
-        # --- band_info에서 standards/tests_supported 추출 (dict/object 모두 지원) ---
-        if isinstance(band_info, dict):
-            supported_standards = band_info.get("standards", [])
-            supported_tests = band_info.get("tests_supported", [])
-        else:
-            supported_standards = getattr(band_info, "standards", [])
-            supported_tests = getattr(band_info, "tests_supported", [])
-
-        if standard not in supported_standards:
-            raise ValueError(
-                f"Standard '{standard}' not supported in band '{band}'. "
-                f"Supported: {supported_standards}"
-            )
-
-        unsupported = [t for t in test_types if t not in supported_tests]
+        unsupported = [t for t in test_types if t not in band_info.tests_supported]
         if unsupported:
-            raise ValueError(
-                f"Unsupported test_types in band '{band}': {unsupported}. "
-                f"Supported: {supported_tests}"
-            )
+            raise ValueError(f"Unsupported test_types in band '{band}': {unsupported}. Supported: {band_info.tests_supported}")
 
-        # --- channels 최소 검증 (policy만) ---
-        if isinstance(channels, dict):
-            policy = channels.get("policy")
-            if policy == "CUSTOM_LIST":
-                ch_list = channels.get("channels", [])
-                if not ch_list:
-                    raise ValueError("channels.policy is CUSTOM_LIST but channels.channels is empty.")
+        # channels policy 최소 체크
+        policy = channels.get("policy")
+        if policy == "CUSTOM_LIST":
+            ch_list = channels.get("channels", [])
+            if not ch_list:
+                raise ValueError("channels.policy is CUSTOM_LIST but channels.channels is empty.")   
+            
+    def list_runs_for_results(self, project_id: str, limit: int = 100):
+        return self.run_repo.list_recent_runs(project_id=project_id, limit=limit)
+
+
+    import json
+
+    def get_results_page(
+        self,
+        project_id: str,
+        run_id: str,
+        status_filter: str = "ALL",
+        offset: int = 0,
+        limit: int = 5000,
+    ):
+        rows = self.run_repo.list_results(
+            project_id=project_id,
+            run_id=run_id,
+            status=status_filter,
+            limit=limit,
+        )
+
+        out = []
+        for r in rows:
+            out.append({
+                "result_id": r.get("result_id"),
+                "status": r.get("status", ""),
+                "test_type": r.get("test_type", ""),
+                "band": r.get("band", ""),
+                "standard": r.get("standard", ""),
+                "group": r.get("group", ""),
+                "channel": r.get("channel"),
+                "bw_mhz": r.get("bw_mhz"),
+                "margin_db": r.get("margin_db"),
+                "measured_value": r.get("measured_value"),
+                "limit_value": r.get("limit_value"),
+                "reason": r.get("reason", ""),
+                "test_key": r.get("test_key", ""),
+            })
+        return out
+
+    def create_rerun_preset_from_result_rows(
+        self,
+        project_id: str,
+        base_preset_id: str,
+        selected_rows: List[Dict[str, Any]],
+    ) -> str:
+        return self.create_rerun_preset_from_selected_results(
+            project_id=project_id,
+            base_preset_id=base_preset_id,
+            selected_rows=selected_rows,
+        )
+            

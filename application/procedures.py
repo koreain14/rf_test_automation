@@ -17,7 +17,7 @@ class ProcedureRegistry:
         self._map["PSD"] = common
         self._map["OBW"] = common
         self._map["SP"]  = common
-        self._map["TXP"] = common
+        self._map["RX"] = common
 
     def get_steps(self, test_type: str) -> List[Step]:
         if test_type not in self._map:

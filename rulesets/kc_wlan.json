@@ -6,7 +6,7 @@
   "bands": {
     "2.4G": {
         "standards": ["802.11b", "802.11g", "802.11n", "802.11ax"],
-      "tests_supported": ["PSD", "OBW", "SP", "RX"],
+        "tests_supported": ["PSD", "OBW", "SP", "RX"],
         "channel_groups": {
           "ISM": {
             "channels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],

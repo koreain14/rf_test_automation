@@ -8,7 +8,7 @@
     "standard": "802.11ax",
     "device_class": "LPI",
     "plan_mode": "DEMO",
-    "test_types": ["PSD", "OBW", "SP"],
+    "test_types": ["PSD", "OBW", "SP", "Rx"],
     "bandwidth_mhz": [80],
     "channels": {
       "policy": "CUSTOM_LIST",

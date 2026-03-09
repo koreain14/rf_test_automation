@@ -2,13 +2,13 @@
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from .db import get_connection
 
 
 def now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class RunRepositorySQLite:
@@ -70,9 +70,18 @@ class RunRepositorySQLite:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
-        SELECT * FROM runs
-        WHERE project_id = ?
-        ORDER BY started_at DESC
+        SELECT
+            r.run_id,
+            r.preset_id,
+            r.started_at,
+            r.status,
+            p.name AS preset_name
+        FROM runs r
+        LEFT JOIN presets p
+            ON r.project_id = p.project_id
+        AND r.preset_id = p.preset_id
+        WHERE r.project_id = ?
+        ORDER BY r.started_at DESC
         LIMIT ?
         """, (project_id, int(limit)))
         rows = [dict(r) for r in cur.fetchall()]
@@ -91,40 +100,117 @@ class RunRepositorySQLite:
         conn.close()
         return rows
     
+    # infrastructure/run_repo_sqlite.py
+
     def list_results(self, project_id: str, run_id: str, status: str | None = None, limit: int = 5000):
+        """
+        Results 탭 표시용 결과 리스트.
+        ✅ result_id 포함 (선택한 결과의 step_results 조회용)
+        ✅ measured_value / limit_value 포함
+        ✅ reason: step_results.data_json의 최신 기록에서 추출
+        """
         conn = get_connection()
         cur = conn.cursor()
 
-        if status and status != "ALL":
-            cur.execute("""
-            SELECT result_id, status, test_type, band, standard, channel, bw_mhz, margin_db, test_key, tags_json
-            FROM results
-            WHERE project_id = ? AND run_id = ? AND status = ?
-            ORDER BY created_at ASC
-            LIMIT ?
-            """, (project_id, run_id, status, int(limit)))
-        else:
-            cur.execute("""
-            SELECT result_id, status, test_type, band, standard, channel, bw_mhz, margin_db, test_key, tags_json
-            FROM results
-            WHERE project_id = ? AND run_id = ?
-            ORDER BY created_at ASC
-            LIMIT ?
-            """, (project_id, run_id, int(limit)))
+        base_sql = """
+        SELECT
+            r.result_id,
+            r.status,
+            r.test_type,
+            r.band,
+            r.standard,
+            r.channel,
+            r.bw_mhz,
+            r.margin_db,
+            r.measured_value,
+            r.limit_value,
+            r.test_key,
+            r.tags_json,
+            (
+                SELECT sr.data_json
+                FROM step_results sr
+                WHERE sr.project_id = r.project_id AND sr.result_id = r.result_id
+                ORDER BY sr.created_at DESC
+                LIMIT 1
+            ) AS last_step_data_json
+        FROM results r
+        WHERE r.project_id = ? AND r.run_id = ?
+        """
 
+        params = [project_id, run_id]
+
+        if status and status != "ALL":
+            base_sql += " AND r.status = ?"
+            params.append(status)
+
+        base_sql += """
+        ORDER BY r.created_at ASC
+        LIMIT ?
+        """
+        params.append(int(limit))
+
+        cur.execute(base_sql, tuple(params))
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
 
-        # tags_json에서 group 꺼내기(편의)
+        # tags_json에서 group 꺼내기(기존 유지) :contentReference[oaicite:2]{index=2}
         for r in rows:
+            # group
             try:
-                import json as _json
-                tags = _json.loads(r.get("tags_json") or "{}")
+                tags = json.loads(r.get("tags_json") or "{}")
                 r["group"] = tags.get("group", "")
             except Exception:
                 r["group"] = ""
+
+            # reason (last_step_data_json 기반)
+            reason = ""
+            try:
+                last = json.loads(r.get("last_step_data_json") or "{}")
+                # 흔히 쓰는 키들을 순서대로 탐색
+                for k in ("reason", "message", "error", "exception", "detail", "desc"):
+                    v = last.get(k)
+                    if isinstance(v, str) and v.strip():
+                        reason = v.strip()
+                        break
+                # nested 형태도 최소 대응
+                if not reason and isinstance(last.get("error"), dict):
+                    v = last["error"].get("message") or last["error"].get("detail")
+                    if isinstance(v, str):
+                        reason = v.strip()
+            except Exception:
+                reason = ""
+
+            r["reason"] = reason
+
         return rows
-    
+
+    def get_run_status_counts(self, project_id: str, run_id: str) -> dict[str, int]:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT status, COUNT(*) AS cnt
+            FROM results
+            WHERE project_id = ? AND run_id = ?
+            GROUP BY status
+            """,
+            (project_id, run_id),
+        )
+
+        out = {"PASS": 0, "FAIL": 0, "SKIP": 0, "ERROR": 0}
+        for row in cur.fetchall():
+            status = row["status"]
+            cnt = row["cnt"]
+            if status in out:
+                out[status] = cnt
+            else:
+                out[status] = cnt
+
+        conn.close()
+        return out
+
+
     def create_result_stub(self, project_id: str, run_id: str, row: Dict[str, Any]) -> str:
         """
         row must include:
@@ -219,37 +305,4 @@ class RunRepositorySQLite:
                 r["data"] = json.loads(r.get("data_json") or "{}")
             except Exception:
                 r["data"] = {}
-        return rows
-
-    def list_results(self, project_id: str, run_id: str, status: str | None = None, limit: int = 5000):
-        # ✅ result_id를 포함해서 반환하도록 수정
-        conn = get_connection()
-        cur = conn.cursor()
-
-        if status and status != "ALL":
-            cur.execute("""
-            SELECT result_id, status, test_type, band, standard, channel, bw_mhz, margin_db, test_key, tags_json
-            FROM results
-            WHERE project_id = ? AND run_id = ? AND status = ?
-            ORDER BY created_at ASC
-            LIMIT ?
-            """, (project_id, run_id, status, int(limit)))
-        else:
-            cur.execute("""
-            SELECT result_id, status, test_type, band, standard, channel, bw_mhz, margin_db, test_key, tags_json
-            FROM results
-            WHERE project_id = ? AND run_id = ?
-            ORDER BY created_at ASC
-            LIMIT ?
-            """, (project_id, run_id, int(limit)))
-
-        rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
-
-        for r in rows:
-            try:
-                tags = json.loads(r.get("tags_json") or "{}")
-                r["group"] = tags.get("group", "")
-            except Exception:
-                r["group"] = ""
         return rows

@@ -1,13 +1,13 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .db import get_connection
 
 
 def now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class PlanRepositorySQLite:
@@ -144,31 +144,6 @@ class PlanRepositorySQLite:
         """, (json.dumps(preset_json, ensure_ascii=False), now(), preset_id))
         conn.commit()
         conn.close()
-
-    def update_override_enabled(self, override_id: str, enabled: bool) -> None:
-        """override의 enabled 플래그를 업데이트(soft enable/disable)."""
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE overrides
-            SET enabled = ?, updated_at = ?
-            WHERE override_id = ?
-            """,
-            (1 if enabled else 0, now(), override_id),
-        )
-        conn.commit()
-        conn.close()
-
-    def delete_override(self, override_id: str) -> None:
-        """override를 완전 삭제(hard delete). MVP에서는 사용하지 않길 권장."""
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM overrides WHERE override_id = ?", (override_id,))
-        conn.commit()
-        conn.close()
-
-
         
     def ensure_demo_project(self, name: str) -> str:
         conn = get_connection()

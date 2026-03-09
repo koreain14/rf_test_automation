@@ -1,6 +1,9 @@
 # application/run_service_step.py
 from __future__ import annotations
+import logging
 from typing import Callable, List, Optional
+
+log = logging.getLogger(__name__)
 
 from application.scheduler import reorder_cases_channel_centric, ChannelCentricPolicy
 from application.procedures import ProcedureRegistry
@@ -10,10 +13,7 @@ from application.instruments_dummy import DummyInstrument
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
 from domain.overrides import apply_overrides
 from domain.expand import expand_recipe
-import traceback
-import logging
 
-log = logging.getLogger(__name__)
 
 class RunServiceStep:
     def __init__(self, run_repo: RunRepositorySQLite):
@@ -88,6 +88,6 @@ class RunServiceStep:
 
             return "DONE"
         except Exception:
-                
-            log.exception("Run failed")            
+            # ✅ Do NOT swallow errors. Log full traceback and re-raise so UI can show it.
+            log.exception("Run failed")
             raise
