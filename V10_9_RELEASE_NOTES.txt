@@ -1,0 +1,6 @@
+V10.9
+- Added Manual Motion tab
+- Supports manual turntable move, mast move, mast polarization control
+- Supports read position, connect/disconnect, apply-all, save/recall/delete positions
+- Manual positions stored in config/manual_motion_positions.json
+- Motion automation remains optional; manual workflow is now available for future worst-case search work

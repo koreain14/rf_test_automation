@@ -1,0 +1,16 @@
+V10.10 - Preflight Service Extraction
+
+Goal
+- Move preflight_check() out of UI/controller code into a dedicated application service.
+
+Changes
+- Added application/preflight_service.py
+- MainWindow now owns a shared PreflightService instance
+- PlanController validation delegates to PreflightService
+- RunController uses PreflightService for single run and scenario run checks
+
+Benefits
+- Single validation policy for run entry points
+- Better separation between UI and application logic
+- Easier future expansion for licensed/unlicensed and conducted/radiated checks
+- Minimal impact on existing UI flow thanks to compatibility wrappers

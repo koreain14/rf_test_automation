@@ -1,0 +1,5 @@
+v10_19a validation fix
+- Import result_display_formatter in ResultsTab
+- Add plan query service logging for repo vs fallback paths
+- Add ordering policy application logging
+- Include execution/ordering policy in RUN_CONTEXT display

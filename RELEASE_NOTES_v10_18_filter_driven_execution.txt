@@ -1,0 +1,16 @@
+V10.18 FILTER-DRIVEN EXECUTION
+
+Summary
+- Plan detail row checkbox removed from the primary execution model.
+- Run Filtered is the single execution entry point exposed in the main toolbar.
+- Row-level skip/enable is disabled; use filters and group drill-down instead.
+
+Key changes
+- CaseTableModel no longer exposes an Enabled checkbox column.
+- PlanController.runnable_case_keys() now resolves runnable cases from the current filter result only.
+- RunController keeps selected_only only for API compatibility and ignores it internally.
+- MainWindow button text now explicitly says Run Filtered.
+
+Notes
+- Group summary still shows Enabled/Disabled columns for compatibility, but all visible filtered rows are treated as runnable in this version.
+- This change is intended to reduce ambiguity and align the UI with large-scale plan execution.

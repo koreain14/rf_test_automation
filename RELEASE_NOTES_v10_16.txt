@@ -1,0 +1,65 @@
+RF Compliance Test Automation Framework
+Version: v10_16_plan_editor_minimal
+
+Summary
+- Added minimal Plan Editor capabilities on top of the existing Plan tab.
+- Preset remains the template/source, and Plan becomes the editable execution list.
+- Existing Preset Editor / WLAN Expansion / Add Plan / Run flow is preserved.
+- Run path now supports enabled-case filtering and Run Selected execution.
+- Scenario save/load preserves per-plan case state.
+
+Included Features
+1. Plan case enable/disable
+   - Added Enabled checkbox column to the Plan table.
+   - Disabled cases are excluded from Start Run and Run Scenario.
+
+2. Delete selected cases
+   - Removes selected cases from the current scenario plan only.
+   - Does not modify the original preset.
+
+3. Reorder selected cases
+   - Move Up / Move Down added for plan execution order tuning.
+
+4. Run Selected
+   - New button on the Plan tab.
+   - Runs only currently selected and enabled cases.
+
+5. Scenario persistence update
+   - Save Scenario now stores:
+     - case_enabled
+     - case_order
+     - deleted_case_keys
+   - Load Scenario restores them.
+
+Implementation Notes
+- No DB schema change.
+- No preset schema change.
+- No change to WLAN Expansion source-of-truth.
+- Existing RunServiceStep path is preserved.
+- selected_case_keys is passed into worker/service level as a non-breaking optional parameter.
+
+Modified Files
+- ui/plan_context.py
+- ui/table_model.py
+- ui/tabs/plan_tab.py
+- ui/controllers/plan_controller.py
+- ui/controllers/run_controller.py
+- ui/controllers/scenario_controller.py
+- ui/main_window.py
+- ui/workers/run_worker.py
+- ui/workers/scenario_run_worker.py
+- application/run_service.py
+- application/run_service_step.py
+
+Validation
+- python -m compileall application domain infrastructure ui main.py : PASS
+
+Recommended Manual Test
+1. Add Plan from an expansion preset.
+2. In Plan tab, disable a few cases.
+3. Delete one or two selected cases.
+4. Move a selected case up/down.
+5. Click Run Selected with 2-3 cases selected.
+6. Verify only enabled selected cases run.
+7. Save Scenario.
+8. Reload Scenario and verify enabled/order/delete state is restored.

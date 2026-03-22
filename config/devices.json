@@ -1,0 +1,48 @@
+{
+  "devices": [
+    {
+      "name": "E3632A",
+      "type": "power_supply",
+      "driver": "keysight_e3632a",
+      "resource": "GPIB0::6::INSTR",
+      "enabled": true,
+      "description": "HEWLETT-PACKARD,E3632A,0,1.4-5.0-1.0",
+      "serial_number": "0",
+      "options": {},
+      "ports": []
+    },
+    {
+      "name": "N9020B",
+      "type": "analyzer",
+      "driver": "keysight_n9020",
+      "resource": "GPIB0::18::INSTR",
+      "enabled": true,
+      "description": "Keysight Technologies,N9020B,MY60112430,A.31.05",
+      "serial_number": "MY60112430",
+      "options": {},
+      "ports": []
+    },
+    {
+      "name": "TMX0104C",
+      "type": "switchbox",
+      "driver": "generic_switch",
+      "resource": "GPIB0::24::INSTR",
+      "enabled": true,
+      "description": "TNM System,TMX0104C,TM22020002,Rev001.01",
+      "serial_number": "TM22020002",
+      "options": {},
+      "ports": [
+        {
+          "name": "Ant1",
+          "command": "PORT 1",
+          "description": ""
+        },
+        {
+          "name": "Ant2",
+          "command": "PORT 2",
+          "description": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+V8 changes\n- Removed obsolete embedded Results/Compare UI code from MainWindow.\n- Kept MainWindow focused on orchestration and Plan interactions.\n- Added optional pyvisa-backed SCPI driver behavior with graceful fallback.\n- Added AutoInstrumentFactory to prefer SCPI and fall back to Dummy.\n

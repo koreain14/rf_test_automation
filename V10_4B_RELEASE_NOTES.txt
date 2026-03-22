@@ -1,0 +1,6 @@
+V10.4b
+- Added asynchronous VISA scan worker
+- Scan results stream into the table progressively
+- Added scan progress/status updates
+- Added Cancel Scan button
+- Short identify timeout for better responsiveness

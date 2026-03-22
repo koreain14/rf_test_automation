@@ -1,0 +1,5 @@
+V10.5
+- Added RF Path dialog for selecting a switch path per plan
+- Reads available path names from the selected equipment profile switchbox ports
+- Applies switch path automatically at run start when session is created
+- Saves selected switch path into run metadata and shows it in status/results summary

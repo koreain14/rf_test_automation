@@ -1,0 +1,9 @@
+V10.9A Execution Context / Run Stability Update
+
+1. Added ExecutionContext (alias EquipmentSession) to represent optional analyzer / switch / motion / power devices.
+2. Motion and switch remain optional and are only applied when the recipe requests them.
+3. Added cleanup path in RunServiceStep so sessions are disconnected even when an error occurs.
+4. ScenarioRunWorker now guarantees finish_run() is called after each run.
+5. Compare key now includes test_key to reduce accidental row overwrite.
+6. Manual Motion Apply All now reports partial failures more clearly.
+7. Turntable dummy driver now keeps angle state.

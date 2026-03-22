@@ -1,0 +1,5 @@
+v10_19 foundation patch
+- Added repository-backed plan case cache aggregation for group summary / count / detail paging / runnable keys.
+- Added execution_policy / ordering_policy helper module and applied ordering in run_service_step.
+- Added PlanActionService design skeleton for future bulk filtered actions.
+- Added result_display_formatter and RUN_CONTEXT step result for readable metadata display in Results UI.

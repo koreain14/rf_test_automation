@@ -1,0 +1,30 @@
+RF v10.17a Stabilization Patch
+
+Summary
+- Fixed run-start regression introduced after Plan Manager foundation changes.
+- Restored PlanController methods required by RunController and scenario execution.
+- Preserved v10.17 filter/group/drill-down UI additions while keeping the existing run path intact.
+
+Root cause
+- v10.17 PlanController refactor removed lazy case-cache helpers used by RunController:
+  - _ensure_cases_loaded
+  - _case_lookup
+  - selected_case_keys
+  - runnable_case_keys
+- RunController still depends on runnable_case_keys(selected_only=...).
+- Result: clicking Run raised AttributeError before execution started.
+
+What changed
+- Reintroduced lazy case materialization for the current plan context.
+- Reintroduced case-key selection helpers used by RunController.
+- Added filter-aware case matching so selected-run respects the current Plan Manager filter.
+- Reload now clears cached cases so overrides and plan edits refresh correctly.
+
+Compatibility
+- Existing Preset Editor / Add Plan / Run / Results flow remains unchanged.
+- Existing v10.17 Plan Manager UI remains in place.
+- No DB schema changes.
+
+Recommended next step
+- After applying this stabilization patch, verify Run, Run Selected, and Scenario Run.
+- Then continue with v10.17b performance work for larger Plan datasets.

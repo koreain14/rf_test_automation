@@ -1,0 +1,6 @@
+V10.9d
+- Added ui/controllers/plan_controller.py
+- Moved plan-tree, per-plan control editing, and plan validation logic behind PlanController
+- MainWindow now delegates plan operations to PlanController
+- Kept compatibility wrappers in MainWindow to reduce regression risk
+- Verified with compileall to reduce syntax/runtime import errors before packaging

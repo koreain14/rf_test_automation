@@ -1,0 +1,27 @@
+V10.11 Procedure Framework
+
+Goal
+- Introduce a procedure-based execution model while minimizing impact on the current run path.
+
+Changes
+- application/procedures.py
+  - Added BaseProcedure lifecycle:
+    precheck -> setup -> acquire -> compute -> evaluate -> teardown
+  - Added SpectrumProcedure
+  - Added PsdProcedure / ObwProcedure / SpuriousProcedure / RxProcedure
+  - ProcedureRegistry now returns procedure objects via get_procedure()
+  - Legacy get_steps() kept for compatibility
+
+- application/runner_step.py
+  - StepRunner.run_case() now resolves a procedure object and executes it
+  - Current sink/result model remains unchanged
+  - Existing DUT-group logic remains unchanged
+
+Impact
+- Minimal UI impact
+- Existing StepResult sink/repository flow preserved
+- Existing step classes retained and reused inside procedures
+
+Next Step
+- V10.12 Execution Engine
+- Move retry/timeout/abort and artifact collection into procedure-aware execution layer

@@ -1,0 +1,6 @@
+V10.9E Validation / Session Binding Fixes
+- Added equipment profile slot/type validation during session creation.
+- Added safer capability checks before switch and power-control execution.
+- Strengthened plan validation with real device-type checks.
+- Scenario run now validates every plan before starting.
+- Removed duplicate helper methods from main_window.py.

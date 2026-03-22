@@ -1,0 +1,33 @@
+RF v10.17 Plan Manager Foundation Patch
+
+Summary
+- Adds a large-plan friendly Plan Manager foundation without breaking the existing plan tree / detail table flow.
+- Introduces filter-driven group summary and drill-down detail browsing.
+- Keeps the existing Add Plan / Run flow intact and reuses current filter-aware run execution.
+
+Included changes
+1. application/plan_models.py
+   - Adds PlanFilter and PlanGroupSummary models.
+2. application/plan_query_service.py
+   - Adds summary/detail query helper layer for large-plan style operations.
+3. application/plan_service.py
+   - Extends iter_cases() filtering support.
+   - Adds summarize_cases() wrapper.
+4. ui/table_model.py
+   - Adds GroupSummaryTableModel.
+5. ui/tabs/plan_tab.py
+   - Adds Plan Manager filter bar, group summary view, and drill-down controls.
+6. ui/controllers/plan_controller.py
+   - Adds apply_filter(), clear_filter(), load_group_summary(), drill_down_selected_group(), run_filtered().
+   - Merges tree filter + bar filter + group drill-down filter.
+7. ui/main_window.py
+   - Wires new Plan Manager UI actions.
+
+Scope / limitations
+- This patch focuses on browsing, filtering, grouping, and filtered execution.
+- Bulk enable/disable persistence is intentionally not introduced yet, to avoid destabilizing the existing override flow.
+- Current group summary is service-iterator based. It is architected for future DB/cache optimization but does not yet include a dedicated persistence/index layer.
+
+Recommended next step
+- Introduce repository-backed aggregation/paging for 100k+ cases.
+- Add saved filter presets and bulk include/exclude rule persistence.

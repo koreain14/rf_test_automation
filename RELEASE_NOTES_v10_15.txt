@@ -1,0 +1,53 @@
+RF Compliance Test Automation Framework
+Version: rf_v10_15_instrument_layer_foundation
+Date: 2026-03-16
+
+Summary
+- Adds execution-model foundation files to the project as first-class source files.
+- Adds safe bridge recording from RunServiceStep into step_results without changing final verdict logic.
+- Adds instrument-profile resolver and path resolver foundations for Keysight N9020/N9030, R&S FSW, TMX/HCT Switch, and E3632A expansion.
+- Keeps existing Preset Editor / WLAN Expansion / Add Plan / Run flow intact.
+
+Included in this patch
+1) Execution model files
+   - domain/execution.py
+   - application/execution_builder.py
+   - application/executor_factory.py
+   - application/executors/base_executor.py
+   - application/executors/psd_executor.py
+   - application/executors/obw_executor.py
+
+2) Instrument layer foundations
+   - application/instrument_profile_resolver.py
+   - application/path_resolver.py
+   - infrastructure/instruments/analyzer/base_analyzer.py
+   - infrastructure/instruments/analyzer/keysight_xseries_analyzer.py
+   - infrastructure/instruments/analyzer/rs_fsw_analyzer.py
+   - infrastructure/instruments/power_supply/base_power_supply.py
+   - infrastructure/instruments/power_supply/keysight_e3632a.py
+   - infrastructure/instruments/switch/base_switch.py
+   - infrastructure/instruments/switch/tmx_switch.py
+   - infrastructure/instruments/switch/hct_switch.py
+
+3) Stabilization update
+   - application/run_service_step.py updated to record EXECUTION_MODEL / EXECUTOR_PREVIEW in a non-fatal way.
+
+Important notes
+- This patch does NOT replace the current procedure-based run path.
+- Final PASS/FAIL/SKIP/ERROR logic remains on the existing procedure path.
+- EXECUTION_MODEL and EXECUTOR_PREVIEW are metadata bridges for the next phase.
+- Plan Editor feature work is NOT included in this patch. Current Plan tab remains as-is.
+  Reason: this release focuses on run-path stabilization and instrument-layer foundations, to minimize impact.
+
+Recommended checks
+1. Launch app.
+2. Create/import expansion-based preset.
+3. Add Plan.
+4. Run.
+5. Confirm results are created and final verdict logic remains unchanged.
+6. Open result step details and verify EXECUTION_MODEL / EXECUTOR_PREVIEW rows exist.
+
+Next recommended version
+- v10_15b: analyzer profile application inside PSD/OBW executor
+- v10_15c: switch path resolver activation
+- v10_16: plan editing capabilities (enable/disable/delete/reorder cases)

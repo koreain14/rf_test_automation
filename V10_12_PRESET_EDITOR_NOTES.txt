@@ -1,0 +1,21 @@
+V10.12 PRESET EDITOR PATCH
+
+Added:
+- application/preset_model.py
+- application/preset_serializer.py
+- application/preset_repo.py
+- application/preset_validator.py
+- ui/dialogs/preset_editor_dialog.py
+- ui/dialogs/__init__.py
+
+Updated:
+- ui/main_window.py
+  * PresetRepo initialization
+  * Preset Editor button in setup toolbar
+  * on_open_preset_editor() integration
+
+Design goals:
+- Keep existing DB preset flow intact
+- Add file-based preset authoring path
+- Preserve compatibility with schema_version=2 preset JSON
+- Allow optional import from file-based preset editor into current project DB

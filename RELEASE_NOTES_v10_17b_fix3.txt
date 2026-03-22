@@ -1,0 +1,4 @@
+v10_17b_fix3 stabilization
+ - fixed RF Path dialog to show antenna options from switchbox ports
+ - fixed frozen Recipe meta updates for RF Path / Power / Motion dialogs
+ - added InstrumentManager compatibility helpers for switch path/antenna discovery

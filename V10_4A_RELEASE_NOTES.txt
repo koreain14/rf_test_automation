@@ -1,0 +1,6 @@
+V10.4a
+- Added Keysight N9020/N9020B analyzer detection in DeviceDiscovery
+- Added vendor/model/serial parsing from *IDN?
+- Scan Results now show Serial column
+- Device Registry/DeviceInfo now store serial_number
+- Run metadata now includes serial numbers for selected equipment

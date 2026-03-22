@@ -1,0 +1,49 @@
+RF Compliance Test Automation Framework
+Version: v10_17b_plan_manager_performance
+
+Purpose
+- Stabilize large-plan handling after v10_17 / v10_17a
+- Keep existing Plan / Run flow intact
+- Improve filter/group/detail handling without changing core execution model
+
+Main Changes
+1. Added PlanQueryService
+   - Centralizes filtered count / group summary / paged detail loading
+   - Reuses existing plan_service.iter_cases() path when possible
+   - Keeps controller thinner and easier to extend
+
+2. PlanController performance-oriented bridge
+   - Restores compatibility methods used by RunController
+   - Adds filtered paging helpers
+   - Avoids loading all visible cases into detail table when not needed
+
+3. Plan tab paging helpers
+   - Page size combo
+   - Prev / Next navigation
+   - Filtered count label
+   - Designed to show subset rows only
+
+4. Group summary model support
+   - Summary-first workflow for large plans
+   - Detail table becomes drill-down / subset inspector
+
+Design Direction
+- Preset = template
+- Plan Manager = filter / group / bulk / run-filtered control plane
+- Detail Table = subset drill-down only
+- Run = actual execution plane
+
+Scope / Non-goals
+- This patch is a structure + performance foundation patch
+- It does NOT add distributed execution or DB-level aggregation
+- It does NOT replace current run path
+- It does NOT remove the existing row-based detail editor
+
+Expected Benefits
+- Less controller overload
+- Safer future scaling toward very large plans
+- Better separation between summary query and detail rendering
+- Lower risk of regressions in RunController / RunServiceStep path
+
+Suggested Next Step
+- v10_17c: bulk filtered enable/disable and repository-backed aggregation

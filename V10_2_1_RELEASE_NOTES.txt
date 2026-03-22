@@ -1,0 +1,1 @@
+V10.2.1\n- Added session creation logs in application/run_service_step.py\n- Logs selected equipment profile and device summary (analyzer/turntable/mast/switchbox/power)\n- Added fallback instrument log when session analyzer is missing\n- Improved main status label to include current equipment profile during run/scenario run\n

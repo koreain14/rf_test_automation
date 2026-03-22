@@ -1,0 +1,30 @@
+RF Test Automation Framework
+Patch: v10_17b_fix2_import_and_plan_stabilization
+
+Summary
+- Fixed import/runtime regression caused by ui.table_model replacement.
+- Restored PlanTab class expected by MainWindow.
+- Restored CaseTableModel expected by MainWindow/detail table.
+- Rebuilt PlanController with compatibility-first methods required by MainWindow/RunController.
+- Kept Plan Manager foundation widgets (filter/group summary/paging) in additive form.
+
+Key fixes
+1) ui.table_model.py
+   - Restored CaseTableModel.
+   - Kept GroupSummaryTableModel.
+   - Unified to PySide6.
+
+2) ui.tabs.plan_tab.py
+   - Restored PlanTab class.
+   - Preserved legacy scenario/tree/detail structure.
+   - Added filter/group/paging controls without breaking MainWindow API.
+
+3) ui.controllers.plan_controller.py
+   - Restored compatibility methods used by MainWindow and RunController.
+   - Added add_plan / tree selection / paging / runnable_case_keys / selected_case_keys.
+   - Added execution order / RF path / power / motion dialog integration.
+   - Added group summary + drill-down logic based on current PlanContext.
+
+Notes
+- This patch is stabilization-focused. It does not attempt deep repository/query optimization yet.
+- Runtime verification with real PySide6 GUI was not possible in the patch container, so validation focused on syntax and API compatibility review.

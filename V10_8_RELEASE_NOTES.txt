@@ -1,0 +1,5 @@
+V10.8
+- Added Plan Summary button for quick visibility into equipment/profile/path/power/motion settings
+- Added pre-run validation for switch path and power supply configuration
+- Motion remains non-blocking and is skipped safely if unavailable
+- Results run summary now shows richer motion details

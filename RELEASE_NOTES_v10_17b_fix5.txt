@@ -1,0 +1,7 @@
+v10_17b_fix5
+
+- Fixed RunServiceStep execution-model bridge calls to RunRepositorySQLite.append_step_result().
+- Added a compatibility helper so bridge metadata writes always include project_id without changing repository API.
+- Updated EXECUTION_MODEL and EXECUTOR_PREVIEW recording paths to use the helper.
+- Preserved existing PlanController / RunController / MainWindow public contracts.
+- Kept additive patch scope limited to application/run_service_step.py.

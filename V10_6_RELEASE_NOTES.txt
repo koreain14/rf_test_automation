@@ -1,0 +1,5 @@
+V10.6
+- Added Power Settings dialog per plan
+- Supports PSU enable/output_on/voltage/current_limit
+- Applies PSU settings automatically at run start via session power_supply
+- Saves power settings into run metadata and shows PSU summary in status/results

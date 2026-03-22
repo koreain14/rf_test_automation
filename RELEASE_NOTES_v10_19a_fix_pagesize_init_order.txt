@@ -1,0 +1,1 @@
+v10_19a fix: initialize controllers before _build_ui so bind_ui is called only after _plan_controller exists. Maintains page-size binding fix and prevents MainWindow startup AttributeError.

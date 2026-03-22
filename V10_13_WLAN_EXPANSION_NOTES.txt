@@ -1,0 +1,7 @@
+V10.13 WLAN Expansion
+- Added Preset Editor plugin shell integration for WLAN presets
+- Added WlanExpansionEditor for mode plan / channel plan input
+- Added WlanPlanBuilder for valid WLAN combination preview generation
+- Added WLAN preset validator for mode/channel mapping consistency
+- Added built-in KC WLAN 2.4G example preset with WLAN expansion metadata
+- Kept existing preset schema_v2 runtime path intact by storing WLAN-specific data in selection.metadata.wlan_expansion

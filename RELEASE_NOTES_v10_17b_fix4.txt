@@ -1,0 +1,7 @@
+V10.17b Fix4
+
+- Restored Antenna visibility in Plan Summary.
+- Propagate rf_path.antenna into run metadata.
+- Added antenna/power suffix display to run progress/status.
+- Kept existing PlanController/RunController/MainWindow public contracts unchanged.
+- Used replace() pattern for frozen dataclass meta updates.

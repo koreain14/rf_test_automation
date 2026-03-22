@@ -1,0 +1,6 @@
+v10_19a Fix - Plan Detail page size wiring
+
+- Fixed PlanController page size signal binding timing.
+- Added bind_ui() so paging signals are connected after plan_widget is created.
+- Added debug logging for page size changes and detail page queries.
+- Ensured page size change resets current page to 1 and reloads detail page.

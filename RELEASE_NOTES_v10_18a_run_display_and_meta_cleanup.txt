@@ -1,0 +1,12 @@
+V10.18a Run Display / Metadata Cleanup
+
+Key changes:
+- Added application.plan_control_meta helper layer for RF Path / Antenna / Power / Motion metadata access.
+- Added application.run_display_formatter for consistent status/progress/summary text generation.
+- Updated RunController to use formatter-based status/progress rendering.
+- Updated PlanController summary to use metadata helper/formatter.
+- Updated RunWorker / ScenarioRunWorker / RunService / RunServiceStep progress callbacks to optionally carry case metadata.
+
+Intent:
+- Keep public APIs unchanged while unifying display and metadata flow.
+- Reduce direct dict access and duplicated string building.

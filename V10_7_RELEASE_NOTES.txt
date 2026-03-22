@@ -1,0 +1,6 @@
+V10.7
+- Added Motion Settings dialog per plan
+- Supports turntable angle and mast height settings
+- Applies motion settings at run start when devices are available
+- Safely skips motion if turntable/mast are not configured or not connected
+- Saves motion settings into run metadata and shows MOTION summary in status/results

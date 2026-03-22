@@ -1,0 +1,3 @@
+V10.6a switch mapping fix
+- DeviceDiscovery maps TMX and HCT models to switchbox
+- Recommended driver for TMX/HCT switch devices is generic_switch

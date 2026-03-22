@@ -1,0 +1,13 @@
+v1015_full_updated_v10_17c_repo_service_call_audit -> fix preview bridge
+
+Changes:
+- Stabilized EXECUTION_MODEL / EXECUTOR_PREVIEW recording in application/run_service_step.py.
+- Bridge recording now runs in two separate non-fatal blocks so one record type cannot suppress the other.
+- EXECUTOR_PREVIEW is now written for every case, even when no executor is available for the test type.
+- Added per-step preview items with statuses: OK/DONE from executor, NO_PREVIEW for unsupported executors, PROFILE_ERROR for profile resolution failures, ERROR for execution exceptions.
+- Added bridge payload metadata (case_key, standard, test_type, step_count) for easier diagnostics.
+
+Compatibility:
+- Public APIs unchanged.
+- Run Filtered structure unchanged.
+- Add Plan / Run flow unchanged.

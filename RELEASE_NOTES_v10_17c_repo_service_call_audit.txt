@@ -1,0 +1,30 @@
+V10.17c Repository/Service Call Audit Patch
+
+Summary
+- Standardized repository and service call sites to prefer named arguments.
+- Fixed bridge metadata helper usage already introduced in prior versions.
+- Reduced risk of positional-argument contract drift across RunRepository/PlanRepository calls.
+- Added logging in RunService fallback exception path instead of silent swallow.
+
+Key changes
+- application/plan_service.py
+  * Converted repository calls to named-argument style where applicable.
+- application/run_service_step.py
+  * update_run_metadata now uses named arguments.
+  * Existing bridge helper retained for append_step_result.
+- ui/controllers/run_controller.py
+  * create_run / finish_run / get_run_status_counts standardized to named args.
+- ui/workers/scenario_run_worker.py
+  * create_run / finish_run / get_run_status_counts standardized to named args.
+- ui/dialogs/preset_editor_dialog.py
+  * find_preset_id_by_name / update_preset_json standardized to named args.
+- ui/tabs/results_tab.py
+  * list_step_results standardized to named args.
+- main.py
+  * create_project standardized to named args.
+- application/run_service.py
+  * Added logging for exception path to avoid silent failure.
+
+Notes
+- Public APIs were not changed.
+- Patch is additive and contract-preserving.

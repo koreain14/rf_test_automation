@@ -1,0 +1,9 @@
+v10_19a_query_engine_unification
+
+- Added PlanQuery / PlanQueryResult / PlanSortSpec models
+- Added PlanQueryEngine as single query path for detail/summary/count/runnable keys
+- PlanQueryService now delegates context queries through PlanQueryEngine while keeping legacy wrappers
+- Added repository query-by-query wrappers for page/count/summary/runnable access
+- PlanController now builds a single PlanQuery for summary/detail/runnable flows
+- Tree test counts now use grouped summary instead of full row load
+- Added context cache state token to avoid full cache resync on every query

@@ -1,0 +1,27 @@
+V10.9c - Controller Split (Run / Scenario)
+
+What changed
+- Added ui/plan_context.py to separate PlanContext from MainWindow.
+- Added ui/controllers/run_controller.py
+- Added ui/controllers/scenario_controller.py
+- Added ui/controllers/__init__.py
+- MainWindow now delegates:
+  - single run start/stop/progress/finish
+  - scenario run start/stop/progress/finish
+  - scenario save/load/clear
+
+Why
+- Reduce MainWindow responsibility.
+- Prepare next step for PlanController extraction.
+- Make runtime flow easier to test and maintain.
+
+Current scope
+- RunController owns runtime orchestration only.
+- ScenarioController owns scenario persistence and scenario tree lifecycle.
+- Existing UI behavior is preserved as much as possible.
+
+Recommended next step
+1. Extract PlanController from MainWindow
+2. Add preflight_check() service before run start
+3. Save motion/switch/power snapshot into run/result metadata
+4. Add compare filters: improved/regressed/missing
