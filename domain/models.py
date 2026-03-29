@@ -24,6 +24,8 @@ class RuleSet:
     bands: Dict[str, Dict[str, Any]]
     instrument_profiles: Dict[str, InstrumentProfile] = field(default_factory=dict)
     plan_modes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    test_contracts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    test_labels: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

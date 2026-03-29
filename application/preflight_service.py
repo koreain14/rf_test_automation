@@ -5,6 +5,8 @@ from typing import Any, List, Optional
 
 from application.device_registry import DeviceRegistry
 from application.equipment_profile_repo import EquipmentProfileRepo
+from application.instrument_factory import AutoInstrumentFactory, DummyInstrumentFactory, ScpiInstrumentFactory
+from application.instrument_manager import InstrumentManager
 
 
 @dataclass
@@ -42,9 +44,15 @@ class PreflightResult:
 class PreflightService:
     """Application service for run-time preflight validation."""
 
-    def __init__(self, device_registry: DeviceRegistry, profile_repo: EquipmentProfileRepo):
+    def __init__(
+        self,
+        device_registry: DeviceRegistry,
+        profile_repo: EquipmentProfileRepo,
+        instrument_manager: InstrumentManager | None = None,
+    ):
         self.device_registry = device_registry
         self.profile_repo = profile_repo
+        self.instrument_manager = instrument_manager
 
     def validate_plan_context(self, plan_ctx: Any, equipment_profile_name: Optional[str]) -> PreflightResult:
         result = PreflightResult()
@@ -54,8 +62,7 @@ class PreflightService:
             return result
 
         if not equipment_profile_name:
-            result.add_error("PROFILE_MISSING", "Select an equipment profile before running.")
-            return result
+            return self._validate_profileless_plan_context(plan_ctx, result)
 
         profile = self.profile_repo.get_profile(equipment_profile_name)
         if not profile:
@@ -104,6 +111,73 @@ class PreflightService:
                 result.issues.append(
                     PreflightIssue(code=issue.code, level=issue.level, message=f"Plan #{idx}: {issue.message}")
                 )
+        return result
+
+    def runtime_factory_mode(self) -> str:
+        factory = getattr(self.instrument_manager, "factory", None)
+        if isinstance(factory, DummyInstrumentFactory):
+            return "DUMMY"
+        if isinstance(factory, ScpiInstrumentFactory):
+            return "SCPI"
+        if isinstance(factory, AutoInstrumentFactory):
+            return "AUTO"
+        return "UNKNOWN"
+
+    def allows_profileless_run(self) -> bool:
+        return self.runtime_factory_mode() == "DUMMY"
+
+    def _validate_profileless_plan_context(self, plan_ctx: Any, result: PreflightResult) -> PreflightResult:
+        recipe = getattr(plan_ctx, "recipe", None)
+        meta = getattr(recipe, "meta", None) or {}
+        rf_path = meta.get("rf_path") or {}
+        power_control = meta.get("power_control") or {}
+        motion_control = meta.get("motion_control") or {}
+
+        if not self.allows_profileless_run():
+            mode = self.runtime_factory_mode()
+            if mode == "AUTO":
+                result.add_error(
+                    "PROFILE_MISSING",
+                    "Select an equipment profile before running. Profile-less execution is only allowed in explicit DUMMY mode.",
+                )
+            elif mode == "SCPI":
+                result.add_error(
+                    "PROFILE_MISSING",
+                    "Select an equipment profile before running. SCPI mode requires an equipment profile.",
+                )
+            else:
+                result.add_error(
+                    "PROFILE_MISSING",
+                    "Select an equipment profile before running.",
+                )
+            return result
+
+        if rf_path.get("switch_path"):
+            result.add_error(
+                "SWITCHBOX_PROFILE_REQUIRED",
+                "Switch path control requires an equipment profile with a configured switchbox.",
+            )
+
+        if bool(power_control.get("enabled")):
+            result.add_error(
+                "POWER_PROFILE_REQUIRED",
+                "Power control requires an equipment profile with a configured power supply.",
+            )
+
+        angle = motion_control.get("turntable_angle_deg")
+        height = motion_control.get("mast_height_cm")
+        if bool(motion_control.get("enabled")) or angle not in (None, "") or height not in (None, ""):
+            result.add_error(
+                "MOTION_PROFILE_REQUIRED",
+                "Motion control requires an equipment profile with configured motion devices.",
+            )
+
+        if result.ok:
+            result.add_warning(
+                "PROFILELESS_DUMMY_RUN",
+                "Running without an equipment profile in DUMMY mode. Analyzer execution uses the dummy measurement path only.",
+            )
+
         return result
 
     def _validate_device_slot(self, result: PreflightResult, profile_device_name: Optional[str], expected_type: str, role_label: str, required: bool) -> None:

@@ -11,6 +11,12 @@ from infrastructure.plan_repo_sqlite import PlanRepositorySQLite
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
 from application.migrations_preset import migrate_preset_to_latest
 from application.plan_query_service import PlanQueryService
+from application.test_type_symbols import (
+    DEFAULT_TEST_ORDER,
+    canonical_supported_test_types,
+    normalize_test_type_list,
+    normalize_test_type_symbol,
+)
 from domain.ruleset_models import BandInfo, PlanMode  # 경로는 너 프로젝트에 맞게
 
 
@@ -62,6 +68,8 @@ class PlanService:
             bands=bands,                    # <- 변경됨 (BandInfo dict)
             instrument_profiles=ips,
             plan_modes=plan_modes,          # <- 변경됨 (PlanMode dict)
+            test_contracts=dict(raw.get("test_contracts", {}) or {}),
+            test_labels={str(k): str(v) for k, v in (raw.get("test_labels", {}) or {}).items()},
         )
 
         self._ruleset_cache[ruleset_id] = rs
@@ -151,6 +159,7 @@ class PlanService:
             return
 
         search_text = str(filter_.get("search_text", "") or "").strip().lower()
+        filter_test_type = normalize_test_type_symbol(filter_.get("test_type", ""))
         channel_from = filter_.get("channel_from")
         channel_to = filter_.get("channel_to")
         channel_exact = filter_.get("channel")
@@ -158,7 +167,7 @@ class PlanService:
 
         for c in cases:
             ok = True
-            if "test_type" in filter_ and filter_["test_type"] and c.test_type != filter_["test_type"]:
+            if filter_test_type and c.test_type != filter_test_type:
                 ok = False
             if "band" in filter_ and filter_["band"] and c.band != filter_["band"]:
                 ok = False
@@ -312,7 +321,7 @@ class PlanService:
             raise ValueError("No FAIL cases found in this run.")
 
         # 실패 케이스에서 필요한 최소 정보만 모아서 re-run selection 구성
-        test_types = sorted({r["test_type"] for r in failed})
+        test_types = normalize_test_type_list(sorted({r["test_type"] for r in failed}))
         bw_list = sorted({int(r["bw_mhz"]) for r in failed})
         channels = sorted({int(r["channel"]) for r in failed})
 
@@ -370,7 +379,7 @@ class PlanService:
             selection = dict(base)
 
         # 선택된 row에서 필요한 값들 집계
-        test_types = sorted({r["test_type"] for r in selected_rows if r.get("test_type")})
+        test_types = normalize_test_type_list(sorted({r["test_type"] for r in selected_rows if r.get("test_type")}))
         bw_list = sorted({int(r["bw_mhz"]) for r in selected_rows if r.get("bw_mhz") is not None})
         channels = sorted({int(r["channel"]) for r in selected_rows if r.get("channel") is not None})
 
@@ -422,7 +431,7 @@ class PlanService:
         sel = pj.setdefault("selection", {})
         sel["execution_policy"] = {
             "type": "CHANNEL_CENTRIC",
-            "test_order": list(test_order),
+            "test_order": normalize_test_type_list(test_order) or list(DEFAULT_TEST_ORDER),
             "include_bw_in_group": True
         }
 
@@ -448,7 +457,7 @@ class PlanService:
     def validate_preset_against_ruleset(self, preset: Preset, ruleset: RuleSet) -> None:
         sel = preset.selection
         band = sel.get("band")
-        test_types = sel.get("test_types", [])
+        test_types = normalize_test_type_list(sel.get("test_types", []))
         channels = sel.get("channels", {})
         wlan = sel.get("wlan_expansion") or {}
 
@@ -476,7 +485,13 @@ class PlanService:
             if standard not in band_info.standards:
                 raise ValueError(f"Standard '{standard}' not supported in band '{band}'. Supported: {band_info.standards}")
 
-        unsupported = [t for t in test_types if t not in band_info.tests_supported]
+        supported_keys = set(canonical_supported_test_types(band_info.tests_supported))
+        unsupported = []
+        for t in test_types:
+            ts = normalize_test_type_symbol(t)
+            if ts in supported_keys:
+                continue
+            unsupported.append(t)
         if unsupported:
             raise ValueError(f"Unsupported test_types in band '{band}': {unsupported}. Supported: {band_info.tests_supported}")
 
@@ -521,7 +536,7 @@ class PlanService:
             out.append({
                 "result_id": r.get("result_id"),
                 "status": r.get("status", ""),
-                "test_type": r.get("test_type", ""),
+                "test_type": normalize_test_type_symbol(r.get("test_type", "")),
                 "band": r.get("band", ""),
                 "standard": r.get("standard", ""),
                 "group": r.get("group", ""),

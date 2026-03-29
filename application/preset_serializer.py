@@ -14,6 +14,7 @@ from application.preset_model import (
     WlanExpansionModel,
     WlanModeRowModel,
 )
+from application.test_type_symbols import DEFAULT_TEST_ORDER, normalize_test_type_list, normalize_test_type_map
 
 
 class PresetSerializer:
@@ -39,7 +40,7 @@ class PresetSerializer:
             band=str(selection_raw.get("band", "")),
             standard=summary_standard,
             plan_mode=str(selection_raw.get("plan_mode", "DEMO")),
-            test_types=[str(x) for x in (selection_raw.get("test_types") or [])],
+            test_types=normalize_test_type_list(selection_raw.get("test_types") or []),
             bandwidth_mhz=bandwidth_summary,
             channels=ChannelSelectionModel(
                 policy=str(channels_raw.get("policy", "CUSTOM_LIST")),
@@ -50,12 +51,10 @@ class PresetSerializer:
             ),
             execution_policy=ExecutionPolicyModel(
                 type=str(exec_raw.get("type", "CHANNEL_CENTRIC")),
-                test_order=[str(x) for x in (exec_raw.get("test_order") or [])],
+                test_order=normalize_test_type_list(exec_raw.get("test_order") or []) or list(DEFAULT_TEST_ORDER),
                 include_bw_in_group=bool(exec_raw.get("include_bw_in_group", True)),
             ),
-            instrument_profile_by_test={
-                str(k): str(v) for k, v in (selection_raw.get("instrument_profile_by_test") or {}).items()
-            },
+            instrument_profile_by_test=normalize_test_type_map(selection_raw.get("instrument_profile_by_test") or {}),
             device_class=str(selection_raw.get("device_class", "")),
             defaults=dict(selection_raw.get("defaults") or {}),
             metadata=dict(selection_raw.get("metadata") or {}),
@@ -79,6 +78,11 @@ class PresetSerializer:
 
         out["schema_version"] = 3
         selection = out.get("selection") or {}
+        selection["test_types"] = normalize_test_type_list(selection.get("test_types") or [])
+        execution_policy = dict(selection.get("execution_policy") or {})
+        execution_policy["test_order"] = normalize_test_type_list(execution_policy.get("test_order") or []) or list(DEFAULT_TEST_ORDER)
+        selection["execution_policy"] = execution_policy
+        selection["instrument_profile_by_test"] = normalize_test_type_map(selection.get("instrument_profile_by_test") or {})
         wlan_payload = _serialize_wlan_expansion(model.selection.wlan_expansion)
         selection["wlan_expansion"] = wlan_payload
         if model.selection.standard.strip():

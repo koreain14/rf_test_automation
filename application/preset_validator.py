@@ -4,6 +4,7 @@ from typing import Iterable
 
 from application.preset_model import PresetModel
 from application.preset_validation_models import PresetValidationResult
+from application.test_type_symbols import normalize_test_type_list
 from application.preset_validators.wlan_validator import WlanPresetValidator
 
 ALLOWED_CHANNEL_POLICIES = {
@@ -61,11 +62,14 @@ class PresetValidator:
         if sel.channels.channels:
             self._validate_positive_ints(result, "Channel", sel.channels.channels)
 
-        duplicated_tests = _find_duplicates(sel.test_types)
+        normalized_tests = normalize_test_type_list(sel.test_types)
+        normalized_order = normalize_test_type_list(sel.execution_policy.test_order)
+
+        duplicated_tests = _find_duplicates(normalized_tests)
         if duplicated_tests:
             result.add_warning(f"Duplicate test types found: {duplicated_tests}")
 
-        missing_exec = [tt for tt in sel.test_types if tt not in sel.execution_policy.test_order]
+        missing_exec = [tt for tt in normalized_tests if tt not in normalized_order]
         if missing_exec:
             result.add_warning(
                 f"Execution order does not include selected test types: {missing_exec}. Default runner order may differ."

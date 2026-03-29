@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Dict
 
-from application.plan_control_meta import get_antenna, get_motion, get_power, get_switch_path
+from application.plan_control_meta import get_antenna, get_dut_control_mode, get_motion, get_power, get_switch_path
 from application.run_display_formatter import build_plan_summary_lines
 
 
@@ -38,6 +38,15 @@ class PlanControlService:
 
     def current_motion(self, recipe: Any) -> dict:
         return get_motion(self.get_meta(recipe))
+
+    def current_dut_control_mode(self, recipe: Any) -> str:
+        return get_dut_control_mode(self.get_meta(recipe))
+
+    def update_dut_control_mode(self, recipe: Any, mode: str):
+        value = str(mode or "manual").strip().lower()
+        if value not in {"manual", "auto_license", "auto_callbox"}:
+            value = "manual"
+        return self.update_meta(recipe, {"dut_control_mode": value})
 
     def update_rf_path(self, recipe: Any, switch_path: str, antenna: str):
         meta = self.get_meta(recipe)

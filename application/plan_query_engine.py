@@ -152,8 +152,14 @@ class PlanQueryEngine:
         state_token = self._build_context_state_token(ctx=ctx)
         if getattr(ctx, "_cache_state_token", None) == state_token:
             return cache_key
-        rows = self._build_context_rows(ctx=ctx, include_deleted=True)
-        repo.sync_plan_case_cache(cache_key=cache_key, project_id=ctx.project_id, preset_id=ctx.preset_id, rows=rows)
+        repo.apply_plan_case_overlay(
+            cache_key=cache_key,
+            case_order=list(getattr(ctx, "case_order", []) or []),
+            disabled_case_keys=list(self._normalized_case_enabled_overrides(ctx).keys()),
+            excluded_case_keys=sorted(set(getattr(ctx, "case_excluded", set()) or set()), key=str),
+            deleted_case_keys=sorted(set(getattr(ctx, "deleted_case_keys", set()) or set()), key=str),
+            priority_tags=self._normalized_priority_tags(ctx),
+        )
         setattr(ctx, "_cache_state_token", state_token)
         return cache_key
 
@@ -198,10 +204,10 @@ class PlanQueryEngine:
         in-memory TestCase list has been hydrated for a compatibility path.
         """
         case_order = list(getattr(ctx, "case_order", []) or [])
-        case_enabled = dict(getattr(ctx, "case_enabled", {}) or {})
+        case_enabled = self._normalized_case_enabled_overrides(ctx)
         deleted_case_keys = set(getattr(ctx, "deleted_case_keys", set()) or set())
         excluded_case_keys = set(getattr(ctx, "case_excluded", set()) or set())
-        priority_tags = dict(getattr(ctx, "case_priority_tags", {}) or {})
+        priority_tags = self._normalized_priority_tags(ctx)
         return (
             len(case_order),
             self._sequence_digest(case_order),
@@ -236,8 +242,8 @@ class PlanQueryEngine:
         ordered_keys = list(getattr(ctx, "case_order", []) or [c.key for c in getattr(ctx, "all_cases", [])])
         deleted_case_keys = set(getattr(ctx, "deleted_case_keys", set()) or set())
         excluded_case_keys = set(getattr(ctx, "case_excluded", set()) or set())
-        priority_tags = dict(getattr(ctx, "case_priority_tags", {}) or {})
-        case_enabled = dict(getattr(ctx, "case_enabled", {}) or {})
+        priority_tags = self._normalized_priority_tags(ctx)
+        case_enabled = self._normalized_case_enabled_overrides(ctx)
         rows: List[Dict[str, Any]] = []
         for idx, key in enumerate(ordered_keys):
             case = by_key.get(key)
@@ -281,8 +287,8 @@ class PlanQueryEngine:
         ordered_keys = list(getattr(ctx, "case_order", []) or [str(r.get("case_key") or "") for r in base_rows])
         deleted_case_keys = set(getattr(ctx, "deleted_case_keys", set()) or set())
         excluded_case_keys = set(getattr(ctx, "case_excluded", set()) or set())
-        priority_tags = dict(getattr(ctx, "case_priority_tags", {}) or {})
-        case_enabled = dict(getattr(ctx, "case_enabled", {}) or {})
+        priority_tags = self._normalized_priority_tags(ctx)
+        case_enabled = self._normalized_case_enabled_overrides(ctx)
         by_key = {str(r.get("case_key") or ""): dict(r) for r in base_rows}
         rows: List[Dict[str, Any]] = []
         for idx, key in enumerate(ordered_keys):
@@ -324,23 +330,14 @@ class PlanQueryEngine:
         existing_count = repo.count_plan_case_cache_rows(cache_key=cache_key)
         if existing_count > 0:
             if not getattr(ctx, "case_order", None):
-                cached_rows = repo.list_plan_case_cache_rows(cache_key=cache_key)
-                ctx.case_order = [str(r.get("case_key") or "") for r in cached_rows]
-                case_enabled = getattr(ctx, "case_enabled", None)
-                if case_enabled is not None:
-                    for row in cached_rows:
-                        key = str(row.get("case_key") or "")
-                        case_enabled.setdefault(key, bool(row.get("enabled", True)))
+                ctx.case_order = repo.list_plan_case_cache_keys(cache_key=cache_key)
             return
 
         case_order: List[str] = []
-        case_enabled = getattr(ctx, "case_enabled", None)
 
         def _iter_rows() -> Iterable[Dict[str, Any]]:
             for idx, case in enumerate(self.plan_service.iter_cases(ctx.ruleset, ctx.recipe, ctx.overrides)):
                 case_order.append(case.key)
-                if case_enabled is not None:
-                    case_enabled.setdefault(case.key, True)
                 yield {
                     "case_key": case.key,
                     "id": case.key,
@@ -388,10 +385,22 @@ class PlanQueryEngine:
         ctx.all_cases = list(self.plan_service.iter_cases(ctx.ruleset, ctx.recipe, ctx.overrides))
         if not getattr(ctx, "case_order", None):
             ctx.case_order = [c.key for c in ctx.all_cases]
-        case_enabled = getattr(ctx, "case_enabled", None)
-        if case_enabled is not None:
-            for c in ctx.all_cases:
-                case_enabled.setdefault(c.key, True)
+
+    def _normalized_case_enabled_overrides(self, ctx: Any) -> Dict[str, bool]:
+        raw = dict(getattr(ctx, "case_enabled", {}) or {})
+        return {
+            str(key): False
+            for key, value in raw.items()
+            if not bool(value)
+        }
+
+    def _normalized_priority_tags(self, ctx: Any) -> Dict[str, str]:
+        raw = dict(getattr(ctx, "case_priority_tags", {}) or {})
+        return {
+            str(key): str(value)
+            for key, value in raw.items()
+            if str(value or "")
+        }
 
     def _sequence_digest(self, values: List[Any]) -> str:
         h = hashlib.sha1()

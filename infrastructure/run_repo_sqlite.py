@@ -8,7 +8,7 @@ from .db import get_connection
 
 
 def now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 class RunRepositorySQLite:
@@ -131,14 +131,15 @@ class RunRepositorySQLite:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
-        SELECT test_type, band, standard, channel, bw_mhz
-        FROM results
-        WHERE project_id = ? AND run_id = ? AND status = 'FAIL'
+        SELECT res.test_type, res.band, res.standard, res.channel, res.bw_mhz, runs.note AS run_note
+        FROM results res
+        LEFT JOIN runs ON runs.run_id = res.run_id
+        WHERE res.project_id = ? AND res.run_id = ? AND res.status = 'FAIL'
         """, (project_id, run_id))
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
         for row in rows:
-            meta = self._parse_note_metadata(row.get("note", ""))
+            meta = self._parse_note_metadata(row.get("run_note", ""))
             row["equipment_profile_name"] = meta.get("equipment_profile_name")
             row["analyzer_device_name"] = meta.get("analyzer_device_name")
             row["equipment_summary"] = meta.get("equipment_summary")
@@ -175,7 +176,7 @@ class RunRepositorySQLite:
                 SELECT sr.data_json
                 FROM step_results sr
                 WHERE sr.project_id = r.project_id AND sr.result_id = r.result_id
-                ORDER BY sr.created_at DESC
+                ORDER BY sr.created_at DESC, sr.rowid DESC
                 LIMIT 1
             ) AS last_step_data_json
         FROM results r
@@ -339,7 +340,7 @@ class RunRepositorySQLite:
         SELECT step_name, status, artifact_uri, data_json, created_at
         FROM step_results
         WHERE project_id=? AND result_id=?
-        ORDER BY created_at ASC
+        ORDER BY created_at ASC, rowid ASC
         """, (project_id, result_id))
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()

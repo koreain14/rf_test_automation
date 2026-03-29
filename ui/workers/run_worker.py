@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from threading import Event
+
 from PySide6.QtCore import QThread, Signal
 
 
 class RunWorker(QThread):
     progress = Signal(int, str, object)   # count, last_status, case_info
     finished = Signal(str, str, str)   # final_status, run_id, error_text
+    prompt_required = Signal(object)   # payload dict
 
     def __init__(self, run_service, project_id, preset_id, run_id, ruleset, recipe, overrides, equipment_profile_name=None, selected_case_keys=None):
         super().__init__()
@@ -20,9 +23,28 @@ class RunWorker(QThread):
         self.selected_case_keys = list(selected_case_keys or [])
         self._stop = False
         self._error_text = ""
+        self._prompt_event: Event | None = None
+        self._prompt_response: bool = False
 
     def request_stop(self):
         self._stop = True
+        if self._prompt_event is not None:
+            self._prompt_response = False
+            self._prompt_event.set()
+
+    def respond_to_prompt(self, accepted: bool) -> None:
+        self._prompt_response = bool(accepted)
+        if self._prompt_event is not None:
+            self._prompt_event.set()
+
+    def _prompt_reconfigure(self, payload: dict) -> bool:
+        event = Event()
+        self._prompt_event = event
+        self._prompt_response = False
+        self.prompt_required.emit(payload)
+        event.wait()
+        self._prompt_event = None
+        return bool(self._prompt_response)
 
     def run(self):
         import traceback
@@ -46,6 +68,7 @@ class RunWorker(QThread):
                 on_progress=on_progress,
                 equipment_profile_name=self.equipment_profile_name,
                 selected_case_keys=self.selected_case_keys,
+                prompt_reconfigure=self._prompt_reconfigure,
             )
 
         except Exception:

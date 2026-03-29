@@ -32,6 +32,22 @@ def get_motion(meta: dict | None) -> dict:
     return dict(data) if isinstance(data, dict) else {}
 
 
+
+
+def get_dut_control_mode(meta: dict | None) -> str:
+    value = str(_as_dict(meta).get("dut_control_mode") or "manual").strip().lower()
+    return value if value in {"manual", "auto_license", "auto_callbox"} else "manual"
+
+
+def format_dut_control_mode(mode: str | None) -> str:
+    value = str(mode or "manual").strip().lower()
+    labels = {
+        "manual": "MANUAL",
+        "auto_license": "AUTO_LICENSE",
+        "auto_callbox": "AUTO_CALLBOX",
+    }
+    return labels.get(value, "MANUAL")
+
 def _fmt_num(value: Any) -> str:
     try:
         num = float(value)
@@ -78,13 +94,16 @@ def build_run_display_context(meta: dict | None) -> Dict[str, Any]:
     antenna = get_antenna(m)
     power = get_power(m)
     motion = get_motion(m)
+    dut_control_mode = get_dut_control_mode(m)
     return {
         "switch_path": switch_path,
         "antenna": antenna,
         "power": power,
         "motion": motion,
+        "dut_control_mode": dut_control_mode,
         "power_text": format_power(power),
         "motion_text": format_motion(motion),
+        "dut_control_mode_text": format_dut_control_mode(dut_control_mode),
     }
 
 
@@ -99,6 +118,8 @@ def build_status_suffix(meta: dict | None) -> str:
         parts.append(ctx["power_text"])
     if ctx["motion_text"]:
         parts.append(ctx["motion_text"])
+    if ctx["dut_control_mode_text"]:
+        parts.append(f"DUT:{ctx['dut_control_mode_text']}")
     return (" | " + " | ".join(parts)) if parts else ""
 
 
@@ -109,4 +130,6 @@ def build_progress_suffix(meta: dict | None) -> str:
         parts.append(f"ANT:{ctx['antenna']}")
     if ctx["power_text"]:
         parts.append(ctx["power_text"].replace("PSU ", "PSU:"))
+    if ctx["dut_control_mode_text"]:
+        parts.append(f"DUT:{ctx['dut_control_mode_text']}")
     return (" | " + " | ".join(parts)) if parts else ""

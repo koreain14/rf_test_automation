@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from application.test_type_symbols import PLAN_FILTER_TEST_TYPES
 from ui.table_model import CaseTableModel, GroupSummaryTableModel
 
 
@@ -50,7 +51,7 @@ class PlanTab(QWidget):
         self.plan_filter_bw = QComboBox()
         self.plan_filter_bw.addItems(["", "20", "40", "80", "160", "320"])
         self.plan_filter_test = QComboBox()
-        self.plan_filter_test.addItems(["", "PSD", "OBW", "CHANNEL_POWER", "TX_SPURIOUS", "RX", "RX_SPURIOUS", "FE"])
+        self.plan_filter_test.addItems(["", *PLAN_FILTER_TEST_TYPES])
         self.plan_filter_channel_from = QLineEdit()
         self.plan_filter_channel_from.setPlaceholderText("CH from")
         self.plan_filter_channel_to = QLineEdit()

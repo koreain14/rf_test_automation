@@ -1,12 +1,12 @@
 {
   "profiles": [
     {
-      "name": "SS",
+      "name": "ss",
       "analyzer": "N9020B",
       "turntable": null,
       "mast": null,
-      "switchbox": "TMX0104C",
-      "power_supply": "E3632A"
+      "switchbox": null,
+      "power_supply": "E3632A_01"
     }
   ]
 }

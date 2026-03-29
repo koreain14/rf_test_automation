@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -11,19 +11,23 @@ from PySide6.QtWidgets import (
     QToolBar, QVBoxLayout, QWidget, QTabWidget, QProgressBar
 )
 
+from application.analyzer_monitor_service import AnalyzerMonitorService
 from application.plan_service import PlanService
 from application.app_state import AppState
 from application.settings_store import SettingsStore
 from application.device_registry import DeviceRegistry
 from application.device_discovery import DeviceDiscovery
 from application.equipment_profile_repo import EquipmentProfileRepo
+from application.plan_control_meta import format_dut_control_mode
 from application.preflight_service import PreflightService
 from application.preset_repo import PresetRepo
+from ui.dut_channel_monitor_dialog import DutChannelMonitorDialog
 from ui.table_model import CaseTableModel
-from ui.execution_order_dialog import ExecutionOrderDialog
-from ui.rf_path_dialog import RFPathDialog
-from ui.power_settings_dialog import PowerSettingsDialog
-from ui.motion_settings_dialog import MotionSettingsDialog
+from ui.main_window_support import (
+    MainWindowDisplayHelper,
+    MainWindowProjectHelper,
+    MainWindowRuntimeHelper,
+)
 from ui.tabs.compare_tab import CompareTab
 from ui.tabs.results_tab import ResultsTab
 from ui.tabs.plan_tab import PlanTab
@@ -33,13 +37,8 @@ from ui.tabs.equipment_profile_tab import EquipmentProfileTab
 from ui.tabs.manual_motion_tab import ManualMotionTab
 from ui.plan_context import PlanContext
 from ui.controllers import PlanController, RunController, ScenarioController
-from ui.dialogs import PresetEditorDialog
-import uuid
 
-import json
-from datetime import datetime
-from PySide6.QtWidgets import QFileDialog
-
+log = logging.getLogger(__name__)
 
 
 
@@ -93,6 +92,10 @@ class MainWindow(QMainWindow):
         self.svc = plan_service
         self.run_repo = run_repo
         self.run_service = run_service
+        self._runtime_helper = MainWindowRuntimeHelper(self)
+        self._display_helper = MainWindowDisplayHelper(self)
+        self._project_helper = MainWindowProjectHelper(self)
+        self._validate_runtime_services()
 
         self.state = AppState()
         self.settings_store = SettingsStore(Path("config/instrument_settings.json"))
@@ -102,13 +105,12 @@ class MainWindow(QMainWindow):
         self.preflight_service = PreflightService(
             device_registry=self.device_registry,
             profile_repo=self.profile_repo,
+            instrument_manager=getattr(self.run_service, "instrument_manager", None),
         )
+        self.analyzer_monitor_service = AnalyzerMonitorService()
         self.preset_file_repo = PresetRepo(Path("presets"))
 
-        # Bridge runtime managers to shared registries
-        self.run_service.instrument_manager.device_registry = self.device_registry
-        self.run_service.instrument_manager.profile_repo = self.profile_repo
-        self.run_service.instrument_manager.discovery = self.device_discovery
+        self._attach_runtime_dependencies()
 
         self._plans: Dict[str, PlanContext] = {}
         self._tree_filter: Optional[Dict[str, Any]] = None
@@ -146,6 +148,21 @@ class MainWindow(QMainWindow):
 
         
 
+    def _runtime_instrument_manager(self):
+        return self._runtime_helper.runtime_instrument_manager()
+
+    def _validate_runtime_services(self) -> None:
+        self._runtime_helper.validate_runtime_services()
+
+    def _attach_runtime_dependencies(self) -> None:
+        self._runtime_helper.attach_runtime_dependencies()
+
+    def _reset_run_selection_state(self) -> None:
+        self._runtime_helper.reset_run_selection_state()
+
+    def _reset_project_runtime_state(self) -> None:
+        self._runtime_helper.reset_project_runtime_state()
+
 
     def _build_ui(self):
         tabs = QTabWidget()
@@ -166,6 +183,7 @@ class MainWindow(QMainWindow):
         self.btn_rf_path = QPushButton("RF Path")
         self.btn_power = QPushButton("Power")
         self.btn_motion = QPushButton("Motion")
+        self.btn_dut_control = QPushButton("DUT Control")
         self.btn_plan_summary = QPushButton("Plan Summary")
 
         self.btn_add_plan = QPushButton("Add Plan")
@@ -201,6 +219,7 @@ class MainWindow(QMainWindow):
         self.btn_rf_path.clicked.connect(self.on_edit_rf_path)
         self.btn_power.clicked.connect(self.on_edit_power_settings)
         self.btn_motion.clicked.connect(self.on_edit_motion_settings)
+        self.btn_dut_control.clicked.connect(self.on_edit_dut_control_mode)
         self.btn_plan_summary.clicked.connect(self.on_show_plan_summary)
 
         self.project_combo.currentIndexChanged.connect(self.on_project_changed)
@@ -261,7 +280,7 @@ class MainWindow(QMainWindow):
 
         self.device_manager_widget = DeviceManagerTab(
             device_registry=self.device_registry,
-            instrument_manager=self.run_service.instrument_manager,
+            instrument_manager=self._runtime_instrument_manager(),
             parent=self,
         )
         tabs.addTab(self.device_manager_widget, "Device Manager")
@@ -274,7 +293,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.equipment_profile_widget, "Equipment Profile")
 
         self.manual_motion_widget = ManualMotionTab(
-            instrument_manager=self.run_service.instrument_manager,
+            instrument_manager=self._runtime_instrument_manager(),
             get_equipment_profile_name=self._current_equipment_profile_name,
             store_path=Path("config/manual_motion_positions.json"),
             parent=self,
@@ -329,75 +348,44 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.btn_rf_path)
         toolbar.addWidget(self.btn_power)
         toolbar.addWidget(self.btn_motion)
+        toolbar.addWidget(self.btn_dut_control)
         toolbar.addWidget(self.btn_plan_summary)
     def _save_instrument_settings(self, settings: Dict[str, Any]) -> None:
         self.settings_store.save_instrument_settings(settings)
 
     def _apply_instrument_factory(self, factory) -> None:
         try:
-            self.run_service.instrument_manager.set_factory(factory)
+            self._runtime_instrument_manager().set_factory(factory)
         except Exception as e:
             QMessageBox.warning(self, "Apply instrument failed", str(e))
             raise
 
     def _current_antenna(self) -> str | None:
-        if hasattr(self, "_plan_controller") and self._plan_controller is not None:
-            return self._plan_controller.current_antenna()
-        return None
+        return self._display_helper.current_antenna()
 
     def _current_plan_meta(self) -> dict:
-        if hasattr(self, "_plan_controller") and self._plan_controller is not None:
-            try:
-                ctx = self._plan_controller._current_context()
-                if ctx and getattr(ctx, "recipe", None):
-                    return dict(ctx.recipe.meta or {})
-            except Exception:
-                pass
-        return {}
+        return self._display_helper.current_plan_meta()
 
     def _run_display_context(self) -> dict:
-        return build_run_display_context(self._current_plan_meta())
+        return self._display_helper.run_display_context()
 
     def _antenna_display_suffix(self) -> str:
-        return build_status_suffix({"rf_path": {"antenna": get_antenna(self._current_plan_meta())}})
+        return self._display_helper.antenna_display_suffix()
 
     def _motion_display_suffix(self) -> str:
-        motion = get_motion(self._current_plan_meta())
-        return (" | " + self._run_display_context().get("motion_text")) if self._run_display_context().get("motion_text") else ""
+        return self._display_helper.motion_display_suffix()
 
     def _power_display_suffix(self) -> str:
-        return (" | " + self._run_display_context().get("power_text")) if self._run_display_context().get("power_text") else ""
+        return self._display_helper.power_display_suffix()
 
     def _equipment_display_suffix(self) -> str:
-        profile_name = self._current_equipment_profile_name()
-        if not profile_name:
-            return ""
-        profile = self.profile_repo.get_profile(profile_name)
-        parts = [f"EQ:{profile_name}"]
-        analyzer = getattr(profile, "analyzer", None) if profile else None
-        if analyzer:
-            parts.append(f"AN:{analyzer}")
-        return " | " + " | ".join(parts)
+        return self._display_helper.equipment_display_suffix()
 
     def _equipment_status_suffix(self) -> str:
-        profile_name = self._current_equipment_profile_name()
-        return f" | EQ:{profile_name}" if profile_name else ""
+        return self._display_helper.equipment_status_suffix()
 
     def _reload_equipment_profiles(self, select_profile_name: Optional[str] = None):
-        self.profile_combo.blockSignals(True)
-        current = select_profile_name or self.profile_combo.currentData()
-        self.profile_combo.clear()
-
-        profiles = self.profile_repo.list_profiles()
-        self.profile_combo.addItem("(None)", None)
-        for p in profiles:
-            self.profile_combo.addItem(p.name, p.name)
-
-        if current:
-            idx = self.profile_combo.findData(current)
-            if idx >= 0:
-                self.profile_combo.setCurrentIndex(idx)
-        self.profile_combo.blockSignals(False)
+        self._project_helper.reload_equipment_profiles(select_profile_name)
 
 
     def _current_equipment_profile_name(self) -> Optional[str]:
@@ -405,123 +393,25 @@ class MainWindow(QMainWindow):
         return str(value) if value else None
 
     def _load_initial_data(self):
-        project_id = self.svc.ensure_default_project()
-        self._reload_projects(select_project_id=project_id)
-        self._reload_presets(project_id)
-
-        if self.project_combo.count() > 0 and self.project_combo.currentIndex() < 0:
-            self.project_combo.setCurrentIndex(0)
-        if self.preset_combo.count() > 0 and self.preset_combo.currentIndex() < 0:
-            self.preset_combo.setCurrentIndex(0)
-
-        self.project_id = self.project_combo.currentData()
-        self.preset_id = self.preset_combo.currentData()
-
-        self._reload_equipment_profiles()
-        if self.project_id:
-            self.on_project_changed(self.project_combo.currentIndex())
-        else:
-            self.project_id = None
-            self.preset_id = None
-
-        if self.preset_id:
-            self.on_preset_changed(self.preset_combo.currentIndex())
+        self._project_helper.load_initial_data()
     
     def _reload_projects(self, select_project_id: Optional[str] = None):
-        self.project_combo.blockSignals(True)
-        self.project_combo.clear()
-
-        projects = self.svc.list_projects()
-        for p in projects:
-            self.project_combo.addItem(p["name"], userData=p["project_id"])
-
-        self.project_combo.blockSignals(False)
-
-        if select_project_id:
-            idx = self.project_combo.findData(select_project_id)
-            if idx >= 0:
-                self.project_combo.setCurrentIndex(idx)
+        self._project_helper.reload_projects(select_project_id)
 
     def _reload_presets(self, project_id: str, select_preset_id: Optional[str] = None):
-        previous_preset_id = self.preset_combo.currentData()
-
-        self.preset_combo.blockSignals(True)
-        self.preset_combo.clear()
-
-        presets = self.svc.list_presets(project_id)
-        for pr in presets:
-            self.preset_combo.addItem(pr["name"], userData=pr["preset_id"])
-
-        self.preset_combo.blockSignals(False)
-
-        target_id = select_preset_id or previous_preset_id
-        idx = self.preset_combo.findData(target_id) if target_id else -1
-        if idx < 0 and self.preset_combo.count() > 0:
-            idx = 0
-        if idx >= 0:
-            self.preset_combo.setCurrentIndex(idx)
-            self.preset_id = self.preset_combo.currentData()
-        else:
-            self.preset_id = None
+        self._project_helper.reload_presets(project_id, select_preset_id)
 
     def on_reload_plan(self):
         self._plan_controller.reload_plan()
 
     def on_project_changed(self, _idx: int):
-        pid = self.project_combo.currentData()
-        self.project_id = str(pid) if pid else None
-
-        if self.project_id:
-            self._reload_presets(self.project_id)
-        else:
-            self.preset_combo.blockSignals(True)
-            self.preset_combo.clear()
-            self.preset_combo.blockSignals(False)
-            self.preset_id = None
-
-        self.preset_id = self.preset_combo.currentData()
-
-        # 트리/테이블 reset
-        self.tree_model.removeRows(0, self.tree_model.rowCount())
-        self.case_model.clear()
-
-        if hasattr(self, "results_widget"):
-            try:
-                self.results_widget.run_combo.clear()
-                self.results_widget.table_model.set_rows([])
-                self.results_widget.step_log_model.set_rows([])
-                self.results_widget.summary.setText("")
-            except Exception:
-                pass
-
-        if hasattr(self, "compare_widget"):
-            try:
-                self.compare_widget.refresh_runs()
-                if hasattr(self.compare_widget, "clear_compare"):
-                    self.compare_widget.clear_compare()
-            except Exception:
-                pass
+        self._project_helper.handle_project_changed(_idx)
 
     def on_preset_changed(self, _idx: int):
-        self.preset_id = self.preset_combo.currentData()
+        self._project_helper.handle_preset_changed(_idx)
 
     def on_open_preset_editor(self):
-        dlg = PresetEditorDialog(
-            preset_repo=self.preset_file_repo,
-            plan_repo=getattr(self.svc, "repo", None),
-            project_id=self.project_id,
-            parent=self,
-        )
-        before = {p["preset_id"]: p["name"] for p in (self.svc.list_presets(self.project_id) if self.project_id else [])}
-        dlg.exec()
-        if self.project_id:
-            selected_preset_id = getattr(dlg, "last_imported_project_preset_id", None)
-            self._reload_presets(self.project_id, select_preset_id=selected_preset_id)
-            after = {p["preset_id"]: p["name"] for p in self.svc.list_presets(self.project_id)}
-            if len(after) != len(before):
-                new_names = sorted(set(after.values()) - set(before.values()))
-                if new_names:
-                    self.statusBar().showMessage(f"Imported presets: {', '.join(new_names)}", 5000)
+        self._project_helper.open_preset_editor()
 
     def on_add_plan(self):
         self._plan_controller.add_plan()
@@ -642,6 +532,88 @@ class MainWindow(QMainWindow):
         self._run_controller.handle_run_finished(final_status, run_id, error_text)
     def _on_scenario_run_finished(self, final_status: str, summaries: list, error_text: str):
         self._run_controller.handle_scenario_run_finished(final_status, summaries, error_text)
+
+    def _build_dut_change_dialog_text(self, payload: dict) -> str:
+        current = dict(payload.get("current") or {})
+        previous = dict(payload.get("previous") or {})
+        instructions = list(payload.get("instructions") or [])
+        dut_control_mode = format_dut_control_mode(str(payload.get("dut_control_mode") or "manual"))
+
+        lines = ["Change DUT settings:", ""]
+        lines.append(f"Control mode: {dut_control_mode}")
+        lines.append("")
+        if previous and any(v not in (None, "") for v in previous.values()):
+            lines.append("Previous setup:")
+            if previous.get("band") not in (None, ""):
+                lines.append(f"- Band: {previous.get('band')}")
+            if previous.get("center_freq_mhz") not in (None, ""):
+                lines.append(f"- Frequency: {previous.get('center_freq_mhz')} MHz")
+            if previous.get("bw_mhz") not in (None, ""):
+                lines.append(f"- Bandwidth: {previous.get('bw_mhz')} MHz")
+            if previous.get("phy_mode") not in (None, ""):
+                lines.append(f"- Mode: {previous.get('phy_mode')}")
+            lines.append("")
+
+        lines.append("New setup:")
+        if current.get("band") not in (None, ""):
+            lines.append(f"- Band: {current.get('band')}")
+        if current.get("center_freq_mhz") not in (None, ""):
+            lines.append(f"- Frequency: {current.get('center_freq_mhz')} MHz")
+        if current.get("bw_mhz") not in (None, ""):
+            lines.append(f"- Bandwidth: {current.get('bw_mhz')} MHz")
+        if current.get("phy_mode") not in (None, ""):
+            lines.append(f"- Mode: {current.get('phy_mode')}")
+
+        if instructions:
+            lines.append("")
+            lines.append("Required updates:")
+            for item in instructions:
+                lines.append(f"- {item}")
+
+        lines.append("")
+        lines.append("Please update DUT and press Continue.")
+        return "\n".join(lines)
+
+    def _show_dut_change_prompt(self, payload: dict, worker) -> None:
+        dlg = DutChannelMonitorDialog(
+            payload=payload,
+            instructions_text=self._build_dut_change_dialog_text(payload),
+            start_monitor_callback=self._start_dut_monitor_preview,
+            parent=self,
+        )
+        accepted = dlg.exec() == dlg.DialogCode.Accepted
+        if worker is not None and hasattr(worker, "respond_to_prompt"):
+            worker.respond_to_prompt(accepted)
+
+    def _start_dut_monitor_preview(self, payload: dict) -> dict:
+        instrument = None
+        if hasattr(self.run_service, "get_active_instrument"):
+            try:
+                instrument = self.run_service.get_active_instrument()
+            except Exception:
+                instrument = None
+
+        result = self.analyzer_monitor_service.start_monitor(
+            instrument=instrument,
+            payload=dict(payload or {}),
+        )
+        return {
+            "ok": bool(result.ok),
+            "status": result.status,
+            "message": result.message,
+            "source": result.source,
+            "center_freq_mhz": result.center_freq_mhz,
+            "bandwidth_mhz": result.bandwidth_mhz,
+            "span_mhz": result.span_mhz,
+        }
+
+    def _on_run_prompt_required(self, payload: object) -> None:
+        worker = None
+        if self._worker is not None and getattr(self._worker, "isRunning", lambda: False)():
+            worker = self._worker
+        elif self._scenario_worker is not None and getattr(self._scenario_worker, "isRunning", lambda: False)():
+            worker = self._scenario_worker
+        self._show_dut_change_prompt(dict(payload or {}), worker)
     def on_stop_run(self):
         self._run_controller.stop_run()
     def on_edit_execution_order(self):
@@ -662,8 +634,14 @@ class MainWindow(QMainWindow):
     def _current_motion_settings(self) -> dict:
         return self._plan_controller.current_motion_settings()
 
+    def _current_dut_control_mode(self) -> str:
+        return self._plan_controller.current_dut_control_mode()
+
     def on_edit_motion_settings(self):
         self._plan_controller.edit_motion_settings()
+
+    def on_edit_dut_control_mode(self):
+        self._plan_controller.edit_dut_control_mode()
 
     def _build_plan_control_summary(self) -> str:
         return self._plan_controller.build_plan_control_summary()

@@ -328,6 +328,82 @@ class PlanRepositorySQLite:
         conn.close()
         return rows
 
+    def list_plan_case_cache_keys(self, *, cache_key: str) -> List[str]:
+        conn = get_connection()
+        cur = conn.cursor()
+        _ensure_plan_case_cache_schema(cur)
+        cur.execute(
+            """
+            SELECT case_key
+            FROM plan_case_cache
+            WHERE cache_key = ?
+            ORDER BY sort_index ASC
+            """,
+            (cache_key,),
+        )
+        rows = [str(r["case_key"]) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def apply_plan_case_overlay(
+        self,
+        *,
+        cache_key: str,
+        case_order: List[str] | None = None,
+        disabled_case_keys: List[str] | None = None,
+        excluded_case_keys: List[str] | None = None,
+        deleted_case_keys: List[str] | None = None,
+        priority_tags: Dict[str, str] | None = None,
+    ) -> None:
+        conn = get_connection()
+        cur = conn.cursor()
+        _ensure_plan_case_cache_schema(cur)
+
+        cur.execute(
+            """
+            UPDATE plan_case_cache
+            SET enabled = 1,
+                excluded = 0,
+                deleted = 0,
+                priority_tag = ''
+            WHERE cache_key = ?
+            """,
+            (cache_key,),
+        )
+
+        if case_order:
+            cur.executemany(
+                "UPDATE plan_case_cache SET sort_index = ? WHERE cache_key = ? AND case_key = ?",
+                [(idx, cache_key, str(key)) for idx, key in enumerate(case_order)],
+            )
+
+        if disabled_case_keys:
+            cur.executemany(
+                "UPDATE plan_case_cache SET enabled = 0 WHERE cache_key = ? AND case_key = ?",
+                [(cache_key, str(key)) for key in disabled_case_keys],
+            )
+
+        if excluded_case_keys:
+            cur.executemany(
+                "UPDATE plan_case_cache SET excluded = 1 WHERE cache_key = ? AND case_key = ?",
+                [(cache_key, str(key)) for key in excluded_case_keys],
+            )
+
+        if deleted_case_keys:
+            cur.executemany(
+                "UPDATE plan_case_cache SET deleted = 1 WHERE cache_key = ? AND case_key = ?",
+                [(cache_key, str(key)) for key in deleted_case_keys],
+            )
+
+        if priority_tags:
+            cur.executemany(
+                "UPDATE plan_case_cache SET priority_tag = ? WHERE cache_key = ? AND case_key = ?",
+                [(str(tag), cache_key, str(key)) for key, tag in priority_tags.items()],
+            )
+
+        conn.commit()
+        conn.close()
+
     def _build_plan_case_cache_where(self, plan_filter: Dict[str, Any] | None):
         plan_filter = dict(plan_filter or {})
         clauses = []

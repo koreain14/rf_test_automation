@@ -2,12 +2,32 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
+from application.test_type_symbols import (
+    DEFAULT_TEST_ORDER,
+    default_profile_for_test_type,
+    normalize_profile_name,
+    normalize_test_type_list,
+    normalize_test_type_map,
+)
 from .models import InstrumentProfile, Preset, Recipe, RuleSet, TestCase
 from .ruleset_models import BandInfo, ChannelGroup
 
 
 def center_freq_mhz_from_channel_5g(ch: int) -> float:
     return 5000 + 5 * ch
+
+
+def _resolve_profile_name_for_test_type(ip_map: Dict[str, Any], test_type: str) -> str:
+    """
+    Resolve a profile name using one consistent contract:
+    preset override first, shared test-type defaults second.
+    """
+    profile_name = str(
+        ip_map.get(test_type)
+        or default_profile_for_test_type(test_type)
+        or "PSD_DEFAULT"
+    ).strip()
+    return normalize_profile_name(profile_name)
 
 
 def _pick_representatives_from_group(
@@ -109,7 +129,7 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
 
     band = str(sel.get("band", "")).strip()
     plan_mode = str(sel.get("plan_mode", "Quick")).strip() or "Quick"
-    test_types = [str(x) for x in (sel.get("test_types") or []) if str(x).strip()]
+    test_types = normalize_test_type_list(sel.get("test_types") or [])
 
     wlan = _extract_wlan_expansion(sel)
     standard = str(sel.get("standard", "")).strip()
@@ -125,23 +145,10 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             channel_policy = _derive_channel_summary(wlan)
 
     ip_by_test: Dict[str, InstrumentProfile] = {}
-    ip_map = dict(sel.get("instrument_profile_by_test") or {})
-    default_profile_by_test = {
-        "PSD": "PSD_DEFAULT",
-        "OBW": "OBW_DEFAULT",
-        "SP": "SP_DEFAULT",
-        "RX": "SP_DEFAULT",
-        "TX_SPURIOUS": "SP_DEFAULT",
-        "RX_SPURIOUS": "SP_DEFAULT",
-        "FE": "SP_DEFAULT",
-        "CHANNEL_POWER": "TXP_DEFAULT",
-        "TXP": "TXP_DEFAULT",
-    }
+    ip_map = normalize_test_type_map(sel.get("instrument_profile_by_test") or {})
     for t in test_types:
-        prof_name = ip_map.get(t) or default_profile_by_test.get(t) or "PSD_DEFAULT"
+        prof_name = _resolve_profile_name_for_test_type(ip_map, t)
         ip = ruleset.instrument_profiles.get(prof_name)
-        if ip is None and t in default_profile_by_test:
-            ip = ruleset.instrument_profiles.get(default_profile_by_test[t])
         if ip is None:
             raise ValueError(f"Instrument profile not found for test '{t}': {prof_name}")
         ip_by_test[t] = ip
@@ -150,13 +157,14 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "preset_name": preset.name,
         "wlan_expansion": wlan,
     }
-    pol = sel.get("execution_policy")
+    pol = dict(sel.get("execution_policy") or {})
     if pol:
+        pol["test_order"] = normalize_test_type_list(pol.get("test_order") or [])
         meta["execution_policy"] = pol
     else:
         meta["execution_policy"] = {
             "type": "CHANNEL_CENTRIC",
-            "test_order": ["PSD", "OBW", "SP", "RX"],
+            "test_order": list(DEFAULT_TEST_ORDER),
             "include_bw_in_group": True,
         }
 

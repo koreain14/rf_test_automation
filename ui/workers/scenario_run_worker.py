@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from threading import Event
 
 from PySide6.QtCore import QThread, Signal
 
@@ -8,6 +9,7 @@ from PySide6.QtCore import QThread, Signal
 class ScenarioRunWorker(QThread):
     progress = Signal(int, int, str, str)   # processed, total, preset_name, last_status
     finished = Signal(str, object, str)     # final_status, summaries(list), error_text
+    prompt_required = Signal(object)        # payload dict
 
     def __init__(self, run_service, run_repo, plan_snapshots, total_cases: int):
         super().__init__()
@@ -17,9 +19,28 @@ class ScenarioRunWorker(QThread):
         self.total_cases = total_cases
         self._stop = False
         self._error_text = ""
+        self._prompt_event: Event | None = None
+        self._prompt_response: bool = False
 
     def request_stop(self):
         self._stop = True
+        if self._prompt_event is not None:
+            self._prompt_response = False
+            self._prompt_event.set()
+
+    def respond_to_prompt(self, accepted: bool) -> None:
+        self._prompt_response = bool(accepted)
+        if self._prompt_event is not None:
+            self._prompt_event.set()
+
+    def _prompt_reconfigure(self, payload: dict) -> bool:
+        event = Event()
+        self._prompt_event = event
+        self._prompt_response = False
+        self.prompt_required.emit(payload)
+        event.wait()
+        self._prompt_event = None
+        return bool(self._prompt_response)
 
     def run(self):
         summaries = []
@@ -61,6 +82,7 @@ class ScenarioRunWorker(QThread):
                     on_progress=on_progress,
                     equipment_profile_name=equipment_profile_name,
                     selected_case_keys=selected_case_keys,
+                    prompt_reconfigure=self._prompt_reconfigure,
                 )
             except Exception:
                 self._error_text = traceback.format_exc()

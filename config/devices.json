@@ -1,7 +1,7 @@
 {
   "devices": [
     {
-      "name": "E3632A",
+      "name": "E3632A_01",
       "type": "power_supply",
       "driver": "keysight_e3632a",
       "resource": "GPIB0::6::INSTR",
@@ -21,28 +21,6 @@
       "serial_number": "MY60112430",
       "options": {},
       "ports": []
-    },
-    {
-      "name": "TMX0104C",
-      "type": "switchbox",
-      "driver": "generic_switch",
-      "resource": "GPIB0::24::INSTR",
-      "enabled": true,
-      "description": "TNM System,TMX0104C,TM22020002,Rev001.01",
-      "serial_number": "TM22020002",
-      "options": {},
-      "ports": [
-        {
-          "name": "Ant1",
-          "command": "PORT 1",
-          "description": ""
-        },
-        {
-          "name": "Ant2",
-          "command": "PORT 2",
-          "description": ""
-        }
-      ]
     }
   ]
 }

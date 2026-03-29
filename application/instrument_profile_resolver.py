@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+from application.test_type_symbols import normalize_profile_name
+
 
 class InstrumentProfileResolver:
     """Resolves logical profile names like PSD_DEFAULT into concrete analyzer settings.
@@ -50,7 +52,7 @@ class InstrumentProfileResolver:
         self.config_path = Path(config_path)
 
     def resolve(self, profile_name: str | None) -> Dict[str, Any]:
-        name = str(profile_name or "").strip()
+        name = normalize_profile_name(profile_name)
         if not name:
             return {}
         resolved = dict(self.DEFAULTS.get(name, {}))

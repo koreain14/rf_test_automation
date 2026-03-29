@@ -1,0 +1,7 @@
+{
+  "instrument": {
+    "mode": "AUTO",
+    "resource_name": "",
+    "timeout_ms": 10000
+  }
+}

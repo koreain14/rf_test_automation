@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from datetime import datetime
 
 from PySide6.QtCore import Qt
@@ -66,6 +67,7 @@ class ScenarioController:
                 "case_enabled": dict(ctx.case_enabled or {}),
                 "case_order": list(ctx.case_order or []),
                 "deleted_case_keys": sorted(ctx.deleted_case_keys or []),
+                "recipe_meta": dict((ctx.recipe.meta or {}) if getattr(ctx, "recipe", None) else {}),
             })
 
         data = {
@@ -135,6 +137,10 @@ class ScenarioController:
                 continue
 
             plan_id = p.get("plan_id") or f"PLAN::{uuid.uuid4()}"
+
+            recipe_meta = dict(p.get("recipe_meta") or {})
+            if recipe_meta:
+                recipe = replace(recipe, meta=dict(recipe_meta))
 
             ctx = PlanContext(
                 project_id=w.project_id,

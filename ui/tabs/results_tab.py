@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 from typing import Callable, Dict, List
 
 from openpyxl import Workbook
@@ -11,9 +12,9 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
-    QLineEdit,
     QSizePolicy,
     QSplitter,
     QTableView,
@@ -21,9 +22,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from application.result_display_formatter import format_step_result_row
 from ui.results_table_model import ResultsTableModel
 from ui.step_log_model import StepLogModel
-from application.result_display_formatter import format_step_result_row
+from ui.workers.results_task_worker import ResultsTaskWorker
+
+
+log = logging.getLogger(__name__)
 
 
 class ResultsTab(QWidget):
@@ -43,6 +48,9 @@ class ResultsTab(QWidget):
         self.get_base_preset_id = get_base_preset_id
         self.reload_presets_callback = reload_presets_callback
         self._last_results_rows: List[Dict] = []
+        self._task_worker: ResultsTaskWorker | None = None
+        self._task_generation = 0
+        self._busy_action = ""
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -173,6 +181,75 @@ class ResultsTab(QWidget):
         self.result_filter_channel.currentIndexChanged.connect(self.load_results)
         self.result_search.returnPressed.connect(self.load_results)
         self.results_table.selectionModel().selectionChanged.connect(self.on_result_selection_changed)
+
+    def reset_view(self) -> None:
+        self._task_generation += 1
+        self._task_worker = None
+        self._last_results_rows = []
+        self.run_combo.blockSignals(True)
+        self.run_combo.clear()
+        self.run_combo.blockSignals(False)
+        self.results_model.set_rows([])
+        self.steps_model.set_rows([])
+        self.lbl_result_summary.setText("PASS 0 | FAIL 0 | SKIP 0 | ERROR 0")
+        for combo in (
+            self.result_filter_status,
+            self.result_filter_test_type,
+            self.result_filter_band,
+            self.result_filter_standard,
+            self.result_filter_bw,
+            self.result_filter_channel,
+        ):
+            combo.blockSignals(True)
+            if combo.count() > 0:
+                combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+        self.result_search.clear()
+        self._update_result_quick_buttons_style()
+        self._set_busy(False)
+
+    def _set_busy(self, busy: bool, action: str = "") -> None:
+        self._busy_action = action if busy else ""
+        self.btn_refresh_runs.setEnabled(not busy)
+        self.btn_load_results.setEnabled(not busy)
+        self.btn_export_results_csv.setEnabled(not busy)
+        self.btn_export_results_excel.setEnabled(not busy)
+        self.btn_clear_result_filter.setEnabled(not busy)
+        self.btn_rerun_from_selection.setEnabled(not busy)
+
+    def _finish_worker(self, worker: ResultsTaskWorker) -> None:
+        if self._task_worker is worker:
+            self._task_worker = None
+        worker.deleteLater()
+        self._set_busy(False)
+
+    def _start_task(self, *, action: str, task, on_success, error_title: str) -> None:
+        if self._task_worker is not None and self._task_worker.isRunning():
+            log.info("results task skipped | busy_action=%s next_action=%s", self._busy_action, action)
+            return
+
+        self._task_generation += 1
+        generation = self._task_generation
+        worker = ResultsTaskWorker(task)
+        self._task_worker = worker
+        self._set_busy(True, action=action)
+
+        def _handle_success(payload) -> None:
+            self._finish_worker(worker)
+            if generation != self._task_generation:
+                return
+            on_success(payload)
+
+        def _handle_failure(error_text: str) -> None:
+            self._finish_worker(worker)
+            if generation != self._task_generation:
+                return
+            log.error("results task failed | action=%s\n%s", action, error_text)
+            QMessageBox.critical(self, error_title, error_text)
+
+        worker.succeeded.connect(_handle_success)
+        worker.failed.connect(_handle_failure)
+        worker.start()
 
     def _fill_run_combo(self, combo: QComboBox, runs: List[Dict]) -> None:
         current = combo.currentData()
@@ -354,6 +431,7 @@ class ResultsTab(QWidget):
         try:
             runs = self.svc.list_runs_for_results(project_id, limit=100)
         except Exception as e:
+            log.exception("load runs failed")
             QMessageBox.critical(self, "Load Runs Failed", str(e))
             return
         self._fill_run_combo(self.run_combo, runs)
@@ -362,27 +440,49 @@ class ResultsTab(QWidget):
         project_id = self.get_project_id()
         run_id = self.run_combo.currentData()
         if not project_id or not run_id:
+            self.results_model.set_rows([])
+            self.steps_model.set_rows([])
+            self._update_results_summary([])
             return
 
-        try:
+        status_filter = self.result_filter_status.currentText()
+        active_filters = self._get_selected_result_filters()
+
+        def _task():
             rows = self.svc.get_results_page(
                 project_id=project_id,
                 run_id=run_id,
-                status_filter=self.result_filter_status.currentText(),
+                status_filter=status_filter,
                 offset=0,
                 limit=500,
             )
-        except Exception as e:
-            QMessageBox.critical(self, "Load Results Failed", str(e))
-            return
+            return {
+                "project_id": project_id,
+                "run_id": run_id,
+                "rows": rows,
+                "filters": active_filters,
+            }
 
-        self._last_results_rows = rows
-        self._refresh_result_filter_options(rows)
-        filtered = self._apply_result_filters(rows, self._get_selected_result_filters())
-        self.results_model.set_rows(filtered)
-        self.results_table.resizeColumnsToContents()
-        self._update_results_summary(filtered)
-        self._update_result_quick_buttons_style()
+        def _apply(payload: Dict) -> None:
+            if payload.get("project_id") != self.get_project_id():
+                return
+            if payload.get("run_id") != self.run_combo.currentData():
+                return
+            rows = list(payload.get("rows") or [])
+            self._last_results_rows = rows
+            self._refresh_result_filter_options(rows)
+            filtered = self._apply_result_filters(rows, payload.get("filters") or self._get_selected_result_filters())
+            self.results_model.set_rows(filtered)
+            self.results_table.resizeColumnsToContents()
+            self._update_results_summary(filtered)
+            self._update_result_quick_buttons_style()
+
+        self._start_task(
+            action="load_results",
+            task=_task,
+            on_success=_apply,
+            error_title="Load Results Failed",
+        )
 
     def clear_result_filters(self):
         self.result_filter_status.setCurrentText("ALL")
@@ -411,18 +511,12 @@ class ResultsTab(QWidget):
             self.steps_model.set_rows([])
             return
 
-        steps = self.run_repo.list_step_results(project_id=project_id, result_id=result_id)
-        run_id = self.run_combo.currentData()
-        if run_id:
-            run_meta = self.run_repo.get_run_metadata(run_id=run_id)
-            if run_meta:
-                steps = [{
-                    "step_name": "RUN_CONTEXT",
-                    "status": "INFO",
-                    "artifact_uri": "",
-                    "data": run_meta,
-                    "created_at": "",
-                }] + steps
+        try:
+            steps = self.run_repo.list_step_results(project_id=project_id, result_id=result_id)
+        except Exception:
+            log.exception("load step results failed | result_id=%s", result_id)
+            self.steps_model.set_rows([])
+            return
         self.steps_model.set_rows([format_step_result_row(s) for s in steps])
         self.steps_table.resizeColumnsToContents()
 
@@ -457,114 +551,149 @@ class ResultsTab(QWidget):
             QMessageBox.information(self, "Re-run preset created", f"New preset created.\nPreset ID: {new_preset_id}")
             self.reload_presets_callback(project_id, new_preset_id)
         except Exception as e:
+            log.exception("rerun from selection failed")
             QMessageBox.warning(self, "Re-run failed", str(e))
 
-    def _fetch_results_for_export(self, limit: int = 20000) -> List[Dict]:
-        project_id = self.get_project_id()
-        run_id = self.run_combo.currentData()
-        if not project_id or not run_id:
-            raise ValueError("No run selected")
+    def _fetch_results_for_export(self, *, project_id: str, run_id: str, status_filter: str, limit: int = 20000) -> List[Dict]:
         return self.svc.get_results_page(
             project_id=project_id,
             run_id=run_id,
-            status_filter=self.result_filter_status.currentText(),
+            status_filter=status_filter,
             offset=0,
             limit=limit,
         )
 
+    def _write_results_csv(self, path: str, rows: List[Dict]) -> None:
+        cols = [
+            ("status", "Status"),
+            ("test_type", "Test"),
+            ("band", "Band"),
+            ("standard", "Standard"),
+            ("group", "Group"),
+            ("channel", "CH"),
+            ("bw_mhz", "BW(MHz)"),
+            ("margin_db", "Margin(dB)"),
+            ("measured_value", "Measured"),
+            ("limit_value", "Limit"),
+            ("reason", "Reason"),
+            ("test_key", "Key"),
+            ("result_id", "Result ID"),
+        ]
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow([header for _, header in cols])
+            for row in rows:
+                writer.writerow([row.get(key, "") for key, _ in cols])
+
+    def _write_results_excel(self, path: str, rows: List[Dict]) -> None:
+        cols = [
+            ("status", "Status"),
+            ("test_type", "Test"),
+            ("band", "Band"),
+            ("standard", "Standard"),
+            ("group", "Group"),
+            ("channel", "CH"),
+            ("bw_mhz", "BW(MHz)"),
+            ("margin_db", "Margin(dB)"),
+            ("measured_value", "Measured"),
+            ("limit_value", "Limit"),
+            ("reason", "Reason"),
+            ("test_key", "Key"),
+            ("result_id", "Result ID"),
+        ]
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Results"
+        header_font = Font(bold=True)
+        for c, (_, header) in enumerate(cols, start=1):
+            cell = ws.cell(row=1, column=c, value=header)
+            cell.font = header_font
+            cell.alignment = Alignment(vertical="center")
+
+        for r_i, row in enumerate(rows, start=2):
+            for c_i, (key, _) in enumerate(cols, start=1):
+                ws.cell(row=r_i, column=c_i, value=row.get(key, ""))
+
+        for c_i in range(1, len(cols) + 1):
+            ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = 16
+        ws.column_dimensions["K"].width = 40
+        wb.save(path)
+
     def export_results_csv(self):
-        try:
-            rows = self._fetch_results_for_export(limit=20000)
-        except Exception as e:
-            QMessageBox.critical(self, "Export CSV Failed", str(e))
-            return
-        if not rows:
-            QMessageBox.information(self, "Export CSV", "No rows to export.")
+        project_id = self.get_project_id()
+        run_id = self.run_combo.currentData()
+        status_filter = self.result_filter_status.currentText()
+        if not project_id or not run_id:
+            QMessageBox.information(self, "Export CSV", "Select a run first.")
             return
 
         path, _ = QFileDialog.getSaveFileName(self, "Export Results (CSV)", "results.csv", "CSV (*.csv)")
         if not path:
             return
 
-        cols = [
-            ("status", "Status"),
-            ("test_type", "Test"),
-            ("band", "Band"),
-            ("standard", "Standard"),
-            ("group", "Group"),
-            ("channel", "CH"),
-            ("bw_mhz", "BW(MHz)"),
-            ("margin_db", "Margin(dB)"),
-            ("measured_value", "Measured"),
-            ("limit_value", "Limit"),
-            ("reason", "Reason"),
-            ("test_key", "Key"),
-            ("result_id", "Result ID"),
-        ]
-        try:
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                w = csv.writer(f)
-                w.writerow([h for _, h in cols])
-                for r in rows:
-                    w.writerow([r.get(k, "") for k, _ in cols])
-        except Exception as e:
-            QMessageBox.critical(self, "Export CSV Failed", str(e))
-            return
+        def _task():
+            rows = self._fetch_results_for_export(
+                project_id=project_id,
+                run_id=run_id,
+                status_filter=status_filter,
+                limit=20000,
+            )
+            if not rows:
+                return {"path": path, "rows": []}
+            self._write_results_csv(path, rows)
+            return {"path": path, "rows": rows}
 
-        QMessageBox.information(self, "Export CSV", f"Saved:\n{path}")
+        def _done(payload: Dict) -> None:
+            rows = list(payload.get("rows") or [])
+            if not rows:
+                QMessageBox.information(self, "Export CSV", "No rows to export.")
+                return
+            QMessageBox.information(self, "Export CSV", f"Saved:\n{payload.get('path', path)}")
+
+        self._start_task(
+            action="export_csv",
+            task=_task,
+            on_success=_done,
+            error_title="Export CSV Failed",
+        )
 
     def export_results_excel(self):
-        try:
-            rows = self._fetch_results_for_export(limit=20000)
-        except Exception as e:
-            QMessageBox.critical(self, "Export Excel Failed", str(e))
-            return
-        if not rows:
-            QMessageBox.information(self, "Export Excel", "No rows to export.")
+        project_id = self.get_project_id()
+        run_id = self.run_combo.currentData()
+        status_filter = self.result_filter_status.currentText()
+        if not project_id or not run_id:
+            QMessageBox.information(self, "Export Excel", "Select a run first.")
             return
 
         path, _ = QFileDialog.getSaveFileName(self, "Export Results (Excel)", "results.xlsx", "Excel (*.xlsx)")
         if not path:
             return
 
-        cols = [
-            ("status", "Status"),
-            ("test_type", "Test"),
-            ("band", "Band"),
-            ("standard", "Standard"),
-            ("group", "Group"),
-            ("channel", "CH"),
-            ("bw_mhz", "BW(MHz)"),
-            ("margin_db", "Margin(dB)"),
-            ("measured_value", "Measured"),
-            ("limit_value", "Limit"),
-            ("reason", "Reason"),
-            ("test_key", "Key"),
-            ("result_id", "Result ID"),
-        ]
-        try:
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Results"
-            header_font = Font(bold=True)
-            for c, (_, header) in enumerate(cols, start=1):
-                cell = ws.cell(row=1, column=c, value=header)
-                cell.font = header_font
-                cell.alignment = Alignment(vertical="center")
+        def _task():
+            rows = self._fetch_results_for_export(
+                project_id=project_id,
+                run_id=run_id,
+                status_filter=status_filter,
+                limit=20000,
+            )
+            if not rows:
+                return {"path": path, "rows": []}
+            self._write_results_excel(path, rows)
+            return {"path": path, "rows": rows}
 
-            for r_i, r in enumerate(rows, start=2):
-                for c_i, (k, _) in enumerate(cols, start=1):
-                    ws.cell(row=r_i, column=c_i, value=r.get(k, ""))
+        def _done(payload: Dict) -> None:
+            rows = list(payload.get("rows") or [])
+            if not rows:
+                QMessageBox.information(self, "Export Excel", "No rows to export.")
+                return
+            QMessageBox.information(self, "Export Excel", f"Saved:\n{payload.get('path', path)}")
 
-            for c_i in range(1, len(cols) + 1):
-                ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = 16
-            ws.column_dimensions["K"].width = 40
-            wb.save(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Export Excel Failed", str(e))
-            return
-
-        QMessageBox.information(self, "Export Excel", f"Saved:\n{path}")
+        self._start_task(
+            action="export_excel",
+            task=_task,
+            on_success=_done,
+            error_title="Export Excel Failed",
+        )
 
     def results_show_all(self):
         self.result_filter_status.setCurrentText("ALL")

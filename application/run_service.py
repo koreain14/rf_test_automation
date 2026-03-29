@@ -10,6 +10,7 @@ from domain.expand import expand_recipe
 from domain.overrides import apply_overrides
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
 from application.scheduler import reorder_cases_channel_centric, ChannelCentricPolicy
+from application.test_type_symbols import DEFAULT_TEST_ORDER, normalize_test_type_list
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class RunService:
         try:
             # execution_policy 읽기 (없으면 기본값)
             pol = (recipe.meta or {}).get("execution_policy") or {}
-            order = pol.get("test_order") or ["PSD", "OBW", "SP", "RX"]
+            order = normalize_test_type_list(pol.get("test_order") or []) or list(DEFAULT_TEST_ORDER)
             include_bw = bool(pol.get("include_bw_in_group", True))
 
             policy = ChannelCentricPolicy(test_order=order, include_bw_in_group=include_bw)

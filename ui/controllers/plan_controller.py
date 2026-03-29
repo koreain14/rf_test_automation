@@ -6,11 +6,12 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItem
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from application.plan_control_service import PlanControlService
 from application.plan_models import PlanFilter, PlanQuery, PlanSortSpec
 from application.plan_query_service import PlanQueryService
+from application.test_type_symbols import DEFAULT_TEST_ORDER, normalize_test_type_list, normalize_test_type_symbol
 from ui.execution_order_dialog import ExecutionOrderDialog
 from ui.motion_settings_dialog import MotionSettingsDialog
 from ui.plan_context import PlanContext
@@ -119,10 +120,10 @@ class PlanController:
 
     # ---------- Tree ----------
     def effective_test_order(self, ctx: PlanContext) -> list[str]:
-        order = (((ctx.recipe.meta or {}).get("execution_policy") or {}).get("test_order") or [])
+        order = normalize_test_type_list((((ctx.recipe.meta or {}).get("execution_policy") or {}).get("test_order") or []))
         if order:
             return list(order)
-        return ["CHANNEL_POWER", "PSD", "OBW", "TX_SPURIOUS", "FE", "RX_SPURIOUS", "RX"]
+        return list(DEFAULT_TEST_ORDER)
 
     def append_plan_to_tree(self, plan_id: str, ctx: PlanContext) -> QStandardItem:
         root = self.window.tree_model.invisibleRootItem()
@@ -494,6 +495,33 @@ class PlanController:
         if dlg.exec():
             ctx.recipe = self._control_service.update_power(ctx.recipe, dlg.settings())  # type: ignore[misc]
 
+
+    def current_dut_control_mode(self) -> str:
+        ctx = self._current_context()
+        return self._control_service.current_dut_control_mode(ctx.recipe) if ctx else "manual"
+
+    def edit_dut_control_mode(self) -> None:
+        ctx = self._current_context()
+        if not ctx:
+            return
+        items = ["manual", "auto_license", "auto_callbox"]
+        current = self.current_dut_control_mode()
+        try:
+            current_index = items.index(current)
+        except ValueError:
+            current_index = 0
+        value, ok = QInputDialog.getItem(
+            self.window,
+            "DUT Control Mode",
+            "Select DUT control mode:",
+            items,
+            current_index,
+            False,
+        )
+        if not ok:
+            return
+        ctx.recipe = self._control_service.update_dut_control_mode(ctx.recipe, value)  # type: ignore[misc]
+
     def current_motion_settings(self) -> dict:
         ctx = self._current_context()
         return self._control_service.current_motion(ctx.recipe) if ctx else {}
@@ -541,7 +569,7 @@ class PlanController:
             band=_txt(pw.plan_filter_band),
             standard=_txt(pw.plan_filter_standard),
             bandwidth_mhz=_int_or_none(pw.plan_filter_bw),
-            test_type=_txt(pw.plan_filter_test),
+            test_type=normalize_test_type_symbol(_txt(pw.plan_filter_test)),
             channel_from=_int_or_none(pw.plan_filter_channel_from),
             channel_to=_int_or_none(pw.plan_filter_channel_to),
             enabled_state=_txt(pw.plan_filter_enabled) or "ALL",

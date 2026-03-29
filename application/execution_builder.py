@@ -3,12 +3,18 @@ from __future__ import annotations
 from typing import Any, Dict, List
 from uuid import uuid4
 
+from application.test_type_symbols import (
+    default_profile_for_test_type,
+    normalize_profile_name,
+    normalize_test_type_symbol,
+    required_capabilities_for_test_type,
+)
 from domain.execution import MeasurementStep
 
 
 class ExecutionBuilder:
     def build_steps_for_case(self, run_id: str, case: Dict[str, Any]) -> List[MeasurementStep]:
-        test_type = str(case.get("test_type", "")).strip().upper()
+        test_type = normalize_test_type_symbol(case.get("test_type", ""))
         if not test_type:
             raise ValueError("Case is missing test_type")
 
@@ -57,26 +63,15 @@ class ExecutionBuilder:
         )
 
     def _resolve_instrument_profile(self, case: Dict[str, Any]) -> str:
-        profile = str(case.get("instrument_profile_name", "")).strip()
+        profile = normalize_profile_name(case.get("instrument_profile_name", ""))
         if profile:
             return profile
         instrument_snapshot = case.get("instrument") or {}
         if isinstance(instrument_snapshot, dict):
-            by_test = instrument_snapshot.get("profile_name")
+            by_test = normalize_profile_name(instrument_snapshot.get("profile_name"))
             if by_test:
-                return str(by_test)
-        fallback = {
-            "PSD": "PSD_DEFAULT",
-            "OBW": "OBW_DEFAULT",
-            "CHANNEL_POWER": "TXP_DEFAULT",
-            "TX_SPURIOUS": "SP_DEFAULT",
-            "SP": "SP_DEFAULT",
-            "RX_SPURIOUS": "SP_DEFAULT",
-            "FE": "SP_DEFAULT",
-            "RX": "RX_DEFAULT",
-        }
-        test_type = str(case.get("test_type", "")).strip().upper()
-        return fallback.get(test_type, "")
+                return by_test
+        return default_profile_for_test_type(case.get("test_type", ""))
 
     def _build_parameters(self, case: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -90,15 +85,7 @@ class ExecutionBuilder:
         }
 
     def _required_capabilities(self, test_type: str) -> List[str]:
-        caps = {
-            "PSD": ["analyzer"],
-            "OBW": ["analyzer"],
-            "CHANNEL_POWER": ["analyzer"],
-            "TX_SPURIOUS": ["analyzer"],
-            "SP": ["analyzer"],
-            "RX": ["analyzer"],
-        }
-        return caps.get(test_type, [])
+        return required_capabilities_for_test_type(test_type)
 
     def _safe_int(self, value: Any, default: int = 0) -> int:
         try:

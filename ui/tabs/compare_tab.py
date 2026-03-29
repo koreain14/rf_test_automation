@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 from typing import Callable, Dict, List
 
 from openpyxl import Workbook
@@ -19,6 +20,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.workers.results_task_worker import ResultsTaskWorker
+
+
+log = logging.getLogger(__name__)
+
 
 class CompareTab(QWidget):
     def __init__(self, service, get_project_id: Callable[[], str | None], parent=None):
@@ -26,7 +32,33 @@ class CompareTab(QWidget):
         self.svc = service
         self.get_project_id = get_project_id
         self._last_compare_rows: List[Dict] = []
+        self._task_worker: ResultsTaskWorker | None = None
+        self._task_generation = 0
+        self._busy_action = ""
         self._build_ui()
+
+    def refresh_runs(self) -> None:
+        self.on_refresh_compare_runs()
+
+    def clear_compare(self) -> None:
+        self._last_compare_rows = []
+        self.compare_model.removeRows(0, self.compare_model.rowCount())
+        self.lbl_compare_summary.setText("No comparison loaded")
+
+    def reset_view(self) -> None:
+        self._task_generation += 1
+        self._task_worker = None
+        self.compare_run_a.blockSignals(True)
+        self.compare_run_b.blockSignals(True)
+        self.compare_run_a.clear()
+        self.compare_run_b.clear()
+        self.compare_run_a.blockSignals(False)
+        self.compare_run_b.blockSignals(False)
+        self.chk_compare_changes_only.blockSignals(True)
+        self.chk_compare_changes_only.setChecked(False)
+        self.chk_compare_changes_only.blockSignals(False)
+        self.clear_compare()
+        self._set_busy(False)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -79,6 +111,48 @@ class CompareTab(QWidget):
         self.btn_export_compare_csv.clicked.connect(self.on_export_compare_csv)
         self.btn_export_compare_excel.clicked.connect(self.on_export_compare_excel)
 
+    def _set_busy(self, busy: bool, action: str = "") -> None:
+        self._busy_action = action if busy else ""
+        self.btn_refresh_compare_runs.setEnabled(not busy)
+        self.btn_load_compare.setEnabled(not busy)
+        self.btn_export_compare_csv.setEnabled(not busy)
+        self.btn_export_compare_excel.setEnabled(not busy)
+        self.chk_compare_changes_only.setEnabled(not busy)
+
+    def _finish_worker(self, worker: ResultsTaskWorker) -> None:
+        if self._task_worker is worker:
+            self._task_worker = None
+        worker.deleteLater()
+        self._set_busy(False)
+
+    def _start_task(self, *, action: str, task, on_success, error_title: str) -> None:
+        if self._task_worker is not None and self._task_worker.isRunning():
+            log.info("compare task skipped | busy_action=%s next_action=%s", self._busy_action, action)
+            return
+
+        self._task_generation += 1
+        generation = self._task_generation
+        worker = ResultsTaskWorker(task)
+        self._task_worker = worker
+        self._set_busy(True, action=action)
+
+        def _handle_success(payload) -> None:
+            self._finish_worker(worker)
+            if generation != self._task_generation:
+                return
+            on_success(payload)
+
+        def _handle_failure(error_text: str) -> None:
+            self._finish_worker(worker)
+            if generation != self._task_generation:
+                return
+            log.error("compare task failed | action=%s\n%s", action, error_text)
+            QMessageBox.critical(self, error_title, error_text)
+
+        worker.succeeded.connect(_handle_success)
+        worker.failed.connect(_handle_failure)
+        worker.start()
+
     def _fill_run_combo(self, combo: QComboBox, runs: List[Dict]) -> None:
         current = combo.currentData()
         combo.blockSignals(True)
@@ -99,7 +173,7 @@ class CompareTab(QWidget):
     def on_refresh_compare_runs(self):
         project_id = self.get_project_id()
         if not project_id:
-            QMessageBox.warning(self, "No project", "Select a project.")
+            self.reset_view()
             return
         try:
             runs = self.svc.list_runs_for_results(project_id, limit=100)
@@ -189,19 +263,41 @@ class CompareTab(QWidget):
             self.compare_model.removeRows(0, self.compare_model.rowCount())
             return
 
-        try:
+        changed_only = self.chk_compare_changes_only.isChecked()
+
+        def _task():
             rows = self.svc.get_comparable_results(project_id, run_a, run_b)
-        except Exception as e:
-            QMessageBox.critical(self, "Compare Failed", str(e))
-            return
+            if changed_only:
+                rows = [r for r in rows if r.get("changed")]
+            return {
+                "project_id": project_id,
+                "run_a": run_a,
+                "run_b": run_b,
+                "changed_only": changed_only,
+                "rows": rows,
+            }
 
-        if self.chk_compare_changes_only.isChecked():
-            rows = [r for r in rows if r.get("changed")]
+        def _apply(payload: Dict) -> None:
+            if payload.get("project_id") != self.get_project_id():
+                return
+            if payload.get("run_a") != self.compare_run_a.currentData():
+                return
+            if payload.get("run_b") != self.compare_run_b.currentData():
+                return
+            if bool(payload.get("changed_only")) != self.chk_compare_changes_only.isChecked():
+                return
+            rows = list(payload.get("rows") or [])
+            self._last_compare_rows = rows
+            changed_count = sum(1 for r in rows if r.get("changed"))
+            self.lbl_compare_summary.setText(f"Rows {len(rows)} | Changed {changed_count}")
+            self._render_compare_rows(rows)
 
-        self._last_compare_rows = list(rows)
-        changed_count = sum(1 for r in rows if r.get("changed"))
-        self.lbl_compare_summary.setText(f"Rows {len(rows)} | Changed {changed_count}")
-        self._render_compare_rows(rows)
+        self._start_task(
+            action="load_compare",
+            task=_task,
+            on_success=_apply,
+            error_title="Compare Failed",
+        )
 
     def _fetch_compare_rows_for_export(self) -> List[Dict]:
         if not self._last_compare_rows:
@@ -232,17 +328,23 @@ class CompareTab(QWidget):
             ("delta_margin", "Delta Margin"),
             ("changed", "Changed"),
         ]
-        try:
+        def _task():
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
                 w.writerow([h for _, h in cols])
                 for r in rows:
                     w.writerow([r.get(k, "") for k, _ in cols])
-        except Exception as e:
-            QMessageBox.critical(self, "Export Compare CSV Failed", str(e))
-            return
+            return {"path": path}
 
-        QMessageBox.information(self, "Export Compare CSV", f"Saved:\n{path}")
+        def _done(payload: Dict) -> None:
+            QMessageBox.information(self, "Export Compare CSV", f"Saved:\n{payload.get('path', path)}")
+
+        self._start_task(
+            action="export_compare_csv",
+            task=_task,
+            on_success=_done,
+            error_title="Export Compare CSV Failed",
+        )
 
     def on_export_compare_excel(self):
         try:
@@ -277,7 +379,7 @@ class CompareTab(QWidget):
         header_font = Font(bold=True)
         light_font = Font(color="FFFFFF")
 
-        try:
+        def _task():
             wb = Workbook()
             ws = wb.active
             ws.title = "Compare"
@@ -320,8 +422,14 @@ class CompareTab(QWidget):
                 ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = width
 
             wb.save(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Export Compare Excel Failed", str(e))
-            return
+            return {"path": path}
 
-        QMessageBox.information(self, "Export Compare Excel", f"Saved:\n{path}")
+        def _done(payload: Dict) -> None:
+            QMessageBox.information(self, "Export Compare Excel", f"Saved:\n{payload.get('path', path)}")
+
+        self._start_task(
+            action="export_compare_excel",
+            task=_task,
+            on_success=_done,
+            error_title="Export Compare Excel Failed",
+        )

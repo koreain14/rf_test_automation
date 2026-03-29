@@ -67,25 +67,23 @@
           "bandwidth_mhz": 20,
           "channels": [
             1,
-            7,
-            13
+            6,
+            11
           ],
           "frequencies_mhz": [
             2412.0,
-            2442.0,
-            2472.0
+            2437.0,
+            2462.0
           ]
         },
         {
           "bandwidth_mhz": 40,
           "channels": [
             3,
-            7,
             11
           ],
           "frequencies_mhz": [
             2422.0,
-            2442.0,
             2462.0
           ]
         }

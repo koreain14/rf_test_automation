@@ -41,6 +41,7 @@ from application.preset_model import (
 from application.preset_repo import PresetFileInfo, PresetRepo
 from application.preset_serializer import PresetSerializer
 from application.preset_validator import PresetValidator
+from application.test_type_symbols import DEFAULT_TEST_ORDER, PLAN_FILTER_TEST_TYPES, normalize_test_type_list, normalize_test_type_map
 from ui.preset_editors import WlanExpansionEditor
 
 
@@ -219,8 +220,8 @@ class PresetEditorDialog(QDialog):
         grid = QGridLayout()
         self.test_checks: dict[str, QCheckBox] = {}
         test_items = [
-            "CHANNEL_POWER", "PSD", "OBW", "TX_SPURIOUS", "FE", "RX_SPURIOUS",
-            "SP", "RX", "BANDEDGE", "COND_POWER", "ACP", "ACLR", "RX_BLOCKING"
+            *PLAN_FILTER_TEST_TYPES,
+            "BANDEDGE", "COND_POWER", "ACP", "ACLR", "RX_BLOCKING"
         ]
         for idx, test_name in enumerate(test_items):
             cb = QCheckBox(test_name)
@@ -238,7 +239,7 @@ class PresetEditorDialog(QDialog):
         exec_grp = QGroupBox("Execution Policy")
         exec_form = QFormLayout(exec_grp)
         self.cb_exec_type = QComboBox(); self.cb_exec_type.addItems(["CHANNEL_CENTRIC", "TEST_CENTRIC"])
-        self.ed_test_order = QLineEdit("PSD,OBW,SP,RX")
+        self.ed_test_order = QLineEdit(",".join(DEFAULT_TEST_ORDER))
         self.chk_include_bw = QCheckBox("Include BW in Group"); self.chk_include_bw.setChecked(True)
         exec_form.addRow("Type", self.cb_exec_type)
         exec_form.addRow("Test Order (CSV)", self.ed_test_order)
@@ -451,10 +452,11 @@ class PresetEditorDialog(QDialog):
             self.ed_device_class.setText(sel.device_class)
             self.ed_profiles_json.setPlainText(json.dumps(sel.instrument_profile_by_test, ensure_ascii=False, indent=2))
             self.cb_exec_type.setCurrentText(sel.execution_policy.type)
-            self.ed_test_order.setText(_csv(sel.execution_policy.test_order))
+            self.ed_test_order.setText(_csv(normalize_test_type_list(sel.execution_policy.test_order) or list(DEFAULT_TEST_ORDER)))
             self.chk_include_bw.setChecked(bool(sel.execution_policy.include_bw_in_group))
+            selected_test_types = set(normalize_test_type_list(sel.test_types))
             for test_name, cb in self.test_checks.items():
-                cb.setChecked(test_name in sel.test_types)
+                cb.setChecked(test_name in selected_test_types)
             self._update_expansion_visibility()
             self.wlan_editor.load_from_model(model)
         finally:
@@ -487,13 +489,13 @@ class PresetEditorDialog(QDialog):
                 band=self.cb_band.currentText().strip(),
                 standard=self.cb_standard.currentText().strip(),
                 plan_mode=self.cb_plan_mode.currentText().strip() or "DEMO",
-                test_types=selected_tests,
+                test_types=normalize_test_type_list(selected_tests),
                 execution_policy=ExecutionPolicyModel(
                     type=self.cb_exec_type.currentText().strip() or "CHANNEL_CENTRIC",
-                    test_order=_parse_str_csv(self.ed_test_order.text()),
+                    test_order=normalize_test_type_list(_parse_str_csv(self.ed_test_order.text())) or list(DEFAULT_TEST_ORDER),
                     include_bw_in_group=self.chk_include_bw.isChecked(),
                 ),
-                instrument_profile_by_test=_parse_json_object(self.ed_profiles_json.toPlainText()),
+                instrument_profile_by_test=normalize_test_type_map(_parse_json_object(self.ed_profiles_json.toPlainText())),
                 device_class=self.ed_device_class.text().strip(),
                 metadata={},
             ),

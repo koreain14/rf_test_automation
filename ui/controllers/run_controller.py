@@ -47,11 +47,12 @@ class RunController:
             return
 
         equipment_profile_name = w._current_equipment_profile_name()
-        if not equipment_profile_name:
-            QMessageBox.warning(w, "Equipment Profile", "Select an equipment profile before running.")
-            return
 
-        ctx = w._plans[w._current_plan_node_id]
+        ctx = w._plans.get(w._current_plan_node_id)
+        if ctx is None:
+            w._current_plan_node_id = None
+            QMessageBox.warning(w, "Plan state", "Selected plan is no longer available. Re-add or reselect a plan.")
+            return
         selected_case_keys = self._resolve_execution_target_keys(execution_scope=execution_scope)
         if not selected_case_keys:
             QMessageBox.information(w, "No runnable cases", self._empty_target_message(execution_scope=execution_scope))
@@ -102,6 +103,8 @@ class RunController:
         )
         w._worker.progress.connect(w._on_run_progress)
         w._worker.finished.connect(w._on_run_finished)
+        if hasattr(w, "_on_run_prompt_required"):
+            w._worker.prompt_required.connect(w._on_run_prompt_required)
         w._worker.start()
 
     def start_scenario_run(self) -> None:
@@ -114,9 +117,6 @@ class RunController:
             return
 
         equipment_profile_name = w._current_equipment_profile_name()
-        if not equipment_profile_name:
-            QMessageBox.warning(w, "Equipment Profile", "Select an equipment profile before running the scenario.")
-            return
 
         plan_ids = w._scenario_controller.scenario_plan_ids_in_tree_order()
         if not plan_ids:
@@ -196,6 +196,8 @@ class RunController:
         )
         w._scenario_worker.progress.connect(w._on_scenario_run_progress)
         w._scenario_worker.finished.connect(w._on_scenario_run_finished)
+        if hasattr(w, "_on_run_prompt_required"):
+            w._scenario_worker.prompt_required.connect(w._on_run_prompt_required)
         w._scenario_worker.start()
 
     def stop_run(self) -> None:

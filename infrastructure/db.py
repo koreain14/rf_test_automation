@@ -144,6 +144,9 @@ def init_db():
     );
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_plan_case_cache_lookup ON plan_case_cache(cache_key, band, standard, test_type, channel, bandwidth_mhz);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_plan_case_cache_sort ON plan_case_cache(cache_key, deleted, sort_index);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_plan_case_cache_runnable ON plan_case_cache(cache_key, deleted, excluded, enabled, sort_index);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_plan_case_cache_group ON plan_case_cache(cache_key, deleted, band, standard, bandwidth_mhz, test_type);")
 
     # Additive migration for existing DB files. CREATE TABLE IF NOT EXISTS does not
     # backfill newly introduced columns on old databases, so we must explicitly
