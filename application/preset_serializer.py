@@ -14,6 +14,7 @@ from application.preset_model import (
     WlanExpansionModel,
     WlanModeRowModel,
 )
+from application.psd_unit_policy import normalize_psd_result_unit
 from application.test_type_symbols import DEFAULT_TEST_ORDER, normalize_profile_name, normalize_test_type_list, normalize_test_type_map
 
 
@@ -41,6 +42,7 @@ class PresetSerializer:
             standard=summary_standard,
             plan_mode=str(selection_raw.get("plan_mode", "DEMO")),
             measurement_profile_name=_resolve_measurement_profile_name(selection_raw),
+            psd_result_unit=normalize_psd_result_unit(selection_raw.get("psd_result_unit")),
             test_types=normalize_test_type_list(selection_raw.get("test_types") or []),
             bandwidth_mhz=bandwidth_summary,
             channels=ChannelSelectionModel(
@@ -89,6 +91,11 @@ class PresetSerializer:
             selection["measurement_profile_name"] = measurement_profile_name
         else:
             selection.pop("measurement_profile_name", None)
+        psd_result_unit = normalize_psd_result_unit(selection.get("psd_result_unit") or "")
+        if psd_result_unit:
+            selection["psd_result_unit"] = psd_result_unit
+        else:
+            selection.pop("psd_result_unit", None)
         wlan_payload = _serialize_wlan_expansion(model.selection.wlan_expansion)
         selection["wlan_expansion"] = wlan_payload
         metadata = _serialize_selection_metadata(model.selection.metadata, wlan_payload)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
+from application.psd_unit_policy import PSD_CANONICAL_UNIT, resolve_psd_result_unit
 from application.test_type_symbols import (
     DEFAULT_TEST_ORDER,
     default_profile_for_test_type,
@@ -165,6 +166,12 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     ip_map = normalize_test_type_map(sel.get("instrument_profile_by_test") or {})
     effective_profile_map: Dict[str, str] = {}
     selector_fallback_tests: List[str] = []
+    psd_result_unit = resolve_psd_result_unit(
+        preset_unit=sel.get("psd_result_unit"),
+        band=band,
+        ruleset=ruleset,
+        ruleset_id=ruleset.id,
+    )
     for t in test_types:
         prof_name = _resolve_profile_name_for_test_type(ip_map, shared_profile_name, t)
         effective_profile_map[t] = prof_name
@@ -188,6 +195,8 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "measurement_profile_name": shared_profile_name,
         "measurement_profile_by_test": dict(ip_map),
         "effective_measurement_profile_by_test": dict(effective_profile_map),
+        "psd_result_unit": psd_result_unit,
+        "psd_canonical_unit": PSD_CANONICAL_UNIT,
     }
     pol = dict(sel.get("execution_policy") or {})
     if pol:
@@ -295,6 +304,8 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                                 "group": find_group(ch),
                                 "phy_mode": phy_mode,
                                 "measurement_profile_name": ip.name,
+                                "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
+                                "psd_canonical_unit": recipe.meta.get("psd_canonical_unit", ""),
                             },
                             key=key,
                         )
@@ -357,6 +368,8 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                         "preset": recipe.meta.get("preset_name", ""),
                         "group": find_group(ch),
                         "measurement_profile_name": ip.name,
+                        "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
+                        "psd_canonical_unit": recipe.meta.get("psd_canonical_unit", ""),
                     },
                     key=key,
                 )

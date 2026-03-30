@@ -19,6 +19,7 @@ from application.measurements.keysight_obw_helper import (
     mock_obw_measurement,
 )
 from application.measurements.keysight_psd_helper import measure_psd_keysight
+from application.psd_unit_policy import PSD_CANONICAL_UNIT, build_psd_display_payload, normalize_psd_result_unit
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,15 @@ class SpectrumProcedure(BaseProcedure):
 class PsdMeasureStep:
     name = "PSD_MEASURE"
 
+    @staticmethod
+    def _display_unit_from_case(case) -> str:
+        tags = dict(getattr(case, "tags", {}) or {})
+        return normalize_psd_result_unit(tags.get("psd_result_unit")) or PSD_CANONICAL_UNIT
+
+    @staticmethod
+    def _display_unit_label(unit: str) -> str:
+        return "mW/MHz" if normalize_psd_result_unit(unit) == "MW_PER_MHZ" else "dBm/MHz"
+
     def run(self, ctx: CaseContext, inst) -> StepResult:
         detection = detect_keysight_xseries_analyzer(inst)
         use_real = bool(detection.get("usable"))
@@ -142,11 +152,26 @@ class PsdMeasureStep:
                 measured = max(float(x) for x in trace)
                 limit = -30.0
                 margin = limit - measured
+                display_unit = self._display_unit_from_case(ctx.case)
+                display_payload = build_psd_display_payload(
+                    canonical_value_dbm_per_mhz=measured,
+                    display_unit=display_unit,
+                )
+                display_limit_payload = build_psd_display_payload(
+                    canonical_value_dbm_per_mhz=limit,
+                    display_unit=display_unit,
+                )
                 result = {
                     "measured_value": measured,
                     "limit_value": limit,
                     "margin_db": margin,
                     "measurement_unit": "dBm/MHz",
+                    "canonical_measurement_unit": self._display_unit_label(PSD_CANONICAL_UNIT),
+                    "psd_result_unit": display_payload["display_unit"],
+                    "psd_canonical_unit": display_payload["canonical_unit"],
+                    "display_measured_value": display_payload["display_value"],
+                    "display_limit_value": display_limit_payload["display_value"],
+                    "display_measurement_unit": self._display_unit_label(display_payload["display_unit"]),
                     "measurement_source": "mock",
                     "backend_reason": reason,
                     "backend_idn": idn,
@@ -194,6 +219,16 @@ class PsdMeasureStep:
             ctx.values["scpi_avg_count"] = result.get("scpi_avg_count")
         if result.get("trace_point_count") is not None:
             ctx.values["trace_point_count"] = result.get("trace_point_count")
+        if result.get("display_measured_value") is not None:
+            ctx.values["display_measured_value"] = result.get("display_measured_value")
+        if result.get("display_limit_value") is not None:
+            ctx.values["display_limit_value"] = result.get("display_limit_value")
+        if result.get("display_measurement_unit"):
+            ctx.values["display_measurement_unit"] = result.get("display_measurement_unit")
+        if result.get("psd_result_unit"):
+            ctx.values["psd_result_unit"] = result.get("psd_result_unit")
+        if result.get("psd_canonical_unit"):
+            ctx.values["psd_canonical_unit"] = result.get("psd_canonical_unit")
         ctx.values["verdict"] = result.get("verdict", "ERROR")
 
         return StepResult(
@@ -209,6 +244,12 @@ class PsdMeasureStep:
                 "backend_idn": result.get("backend_idn", idn),
                 "measurement_profile_name": resolved_profile.get("profile_name", ""),
                 "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "canonical_measurement_unit": result.get("canonical_measurement_unit", "dBm/MHz"),
+                "psd_result_unit": result.get("psd_result_unit", ""),
+                "psd_canonical_unit": result.get("psd_canonical_unit", PSD_CANONICAL_UNIT),
+                "display_measured_value": result.get("display_measured_value"),
+                "display_limit_value": result.get("display_limit_value"),
+                "display_measurement_unit": result.get("display_measurement_unit", "dBm/MHz"),
                 "trace_point_count": result.get("trace_point_count"),
                 "scpi_trace_mode": result.get("scpi_trace_mode", ""),
                 "scpi_detector": result.get("scpi_detector", ""),

@@ -41,6 +41,11 @@ from application.preset_model import (
 )
 from application.preset_repo import PresetFileInfo, PresetRepo
 from application.preset_serializer import PresetSerializer
+from application.psd_unit_policy import (
+    PSD_UNIT_DBM_PER_MHZ,
+    PSD_UNIT_MW_PER_MHZ,
+    resolve_psd_result_unit,
+)
 from application.preset_validator import PresetValidator
 from application.test_type_symbols import DEFAULT_TEST_ORDER, PLAN_FILTER_TEST_TYPES, default_profile_for_test_type, normalize_profile_name, normalize_test_type_list, normalize_test_type_map
 from ui.preset_editors import WlanExpansionEditor
@@ -137,6 +142,9 @@ class PresetEditorDialog(QDialog):
         self.tabs.currentChanged.connect(lambda _: self._refresh_preview())
         self.cb_ruleset.currentTextChanged.connect(self._update_expansion_visibility)
         self.cb_standard.currentTextChanged.connect(self._update_expansion_visibility)
+        self.cb_ruleset.currentTextChanged.connect(self._refresh_psd_result_unit_hint)
+        self.cb_band.currentTextChanged.connect(self._refresh_psd_result_unit_hint)
+        self.cb_psd_result_unit.currentTextChanged.connect(self._refresh_psd_result_unit_hint)
         self._connect_live_preview_signals()
 
 
@@ -152,6 +160,7 @@ class PresetEditorDialog(QDialog):
         _connect(self.cb_standard.currentTextChanged)
         _connect(self.cb_plan_mode.currentTextChanged)
         _connect(self.cb_measurement_profile.currentTextChanged)
+        _connect(self.cb_psd_result_unit.currentTextChanged)
         _connect(self.ed_device_class.textChanged)
         _connect(self.ed_profiles_json.textChanged)
         _connect(self.cb_exec_type.currentTextChanged)
@@ -192,6 +201,12 @@ class PresetEditorDialog(QDialog):
         self.cb_plan_mode = QComboBox(); self.cb_plan_mode.addItems(["DEMO", "Quick", "Worst", "Full"])
         self.cb_measurement_profile = QComboBox()
         self.cb_measurement_profile.setEditable(False)
+        self.cb_psd_result_unit = QComboBox()
+        self.cb_psd_result_unit.addItem("(Ruleset Default)", "")
+        self.cb_psd_result_unit.addItem("mW/MHz", PSD_UNIT_MW_PER_MHZ)
+        self.cb_psd_result_unit.addItem("dBm/MHz", PSD_UNIT_DBM_PER_MHZ)
+        self.lb_psd_result_unit_hint = QLabel("")
+        self.lb_psd_result_unit_hint.setWordWrap(True)
         self.ed_device_class = QLineEdit()
         form.addRow("Name", self.ed_name)
         form.addRow("Description", self.ed_description)
@@ -201,8 +216,11 @@ class PresetEditorDialog(QDialog):
         form.addRow(self.lb_standard, self.cb_standard)
         form.addRow("Plan Mode", self.cb_plan_mode)
         form.addRow("Measurement Profile", self.cb_measurement_profile)
+        form.addRow("PSD Result Unit", self.cb_psd_result_unit)
+        form.addRow("", self.lb_psd_result_unit_hint)
         form.addRow("Device Class", self.ed_device_class)
         self._reload_measurement_profile_options()
+        self._refresh_psd_result_unit_hint()
         self.tabs.addTab(tab, "General")
 
     def _build_wlan_tab(self) -> None:
@@ -458,6 +476,8 @@ class PresetEditorDialog(QDialog):
             self.cb_standard.setCurrentText(sel.standard)
             self.cb_plan_mode.setCurrentText(sel.plan_mode)
             self._reload_measurement_profile_options(sel.measurement_profile_name)
+            idx = self.cb_psd_result_unit.findData(sel.psd_result_unit or "")
+            self.cb_psd_result_unit.setCurrentIndex(idx if idx >= 0 else 0)
             self.ed_device_class.setText(sel.device_class)
             self.ed_profiles_json.setPlainText(json.dumps(sel.instrument_profile_by_test, ensure_ascii=False, indent=2))
             self.cb_exec_type.setCurrentText(sel.execution_policy.type)
@@ -469,6 +489,7 @@ class PresetEditorDialog(QDialog):
             self._update_expansion_visibility()
             self.wlan_editor.load_from_model(model)
         finally:
+            self._refresh_psd_result_unit_hint()
             self._loading_form = False
         self._refresh_preview()
 
@@ -505,6 +526,7 @@ class PresetEditorDialog(QDialog):
                 standard=self.cb_standard.currentText().strip(),
                 plan_mode=self.cb_plan_mode.currentText().strip() or "DEMO",
                 measurement_profile_name=measurement_profile_name,
+                psd_result_unit=str(self.cb_psd_result_unit.currentData() or "").strip(),
                 test_types=normalize_test_type_list(selected_tests),
                 execution_policy=ExecutionPolicyModel(
                     type=self.cb_exec_type.currentText().strip() or "CHANNEL_CENTRIC",
@@ -575,6 +597,7 @@ class PresetEditorDialog(QDialog):
             )
         else:
             self.cb_standard.setToolTip("")
+        self._refresh_psd_result_unit_hint()
 
     def _is_wlan_selected(self) -> bool:
         rid = self.cb_ruleset.currentText().strip().upper()
@@ -619,6 +642,24 @@ class PresetEditorDialog(QDialog):
         if data is not None:
             return normalize_profile_name(data)
         return normalize_profile_name(self.cb_measurement_profile.currentText())
+
+    def _refresh_psd_result_unit_hint(self) -> None:
+        band = self.cb_band.currentText().strip()
+        ruleset_id = self.cb_ruleset.currentText().strip()
+        explicit = str(self.cb_psd_result_unit.currentData() or "").strip()
+        effective = resolve_psd_result_unit(
+            preset_unit=explicit,
+            band=band,
+            ruleset_id=ruleset_id,
+        )
+        if explicit:
+            self.lb_psd_result_unit_hint.setText(
+                f"Effective PSD display policy: {effective} (preset override)"
+            )
+        else:
+            self.lb_psd_result_unit_hint.setText(
+                f"Effective PSD display policy: {effective} (ruleset/band default)"
+            )
 
     def _sanitize_instrument_profile_map(
         self,

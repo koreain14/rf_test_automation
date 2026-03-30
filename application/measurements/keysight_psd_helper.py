@@ -7,6 +7,11 @@ from typing import Any, Dict, Iterator
 
 from application.measurement_profile_runtime import build_consumable_measurement_profile
 from application.measurements.keysight_obw_helper import detect_keysight_xseries_analyzer
+from application.psd_unit_policy import (
+    PSD_CANONICAL_UNIT,
+    build_psd_display_payload,
+    normalize_psd_result_unit,
+)
 
 
 log = logging.getLogger(__name__)
@@ -37,6 +42,13 @@ DEFAULT_REF_LEVEL_DBM = 20.0
 DEFAULT_MODE_SETTLE_S = 0.05
 DEFAULT_POST_CONFIG_SETTLE_S = 0.02
 DEFAULT_POST_INIT_SETTLE_S = 0.05
+
+
+def _psd_unit_label(unit: str) -> str:
+    normalized = normalize_psd_result_unit(unit) or PSD_CANONICAL_UNIT
+    if normalized == "MW_PER_MHZ":
+        return "mW/MHz"
+    return "dBm/MHz"
 
 
 def _iter_timeout_targets(obj: Any) -> Iterator[Any]:
@@ -363,6 +375,11 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
     )
 
 
+def _resolve_display_unit(case: Any) -> str:
+    tags = dict(getattr(case, "tags", {}) or {})
+    return normalize_psd_result_unit(tags.get("psd_result_unit")) or PSD_CANONICAL_UNIT
+
+
 def _configure_psd_measurement(
     inst: Any,
     cfg: KeysightPsdConfig,
@@ -372,8 +389,9 @@ def _configure_psd_measurement(
 ) -> None:
     commands = [
         ("prepare", "*CLS"),
-        ("prepare", ":INIT:CONT OFF"),
+        ("prepare", ":INIT:CONT ON"),
         ("prepare", ":ABOR"),
+        ("prepare", ":CONF:SAN"),
         ("frequency", f":FREQ:CENT {_format_scpi_value(cfg.center_freq_hz)}"),
         ("span", f":FREQ:SPAN {_format_scpi_value(cfg.span_hz)}"),
         ("rbw", f":BAND {_format_scpi_value(cfg.rbw_hz)}"),
@@ -484,7 +502,7 @@ def measure_psd_keysight(
     )
 
     log.info(
-        "keysight psd measurement start | timeout_ms=%s cf_mhz=%s span_mhz=%s rbw_hz=%s vbw_hz=%s detector=%s trace_mode=%s average_enabled=%s avg_count=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s profile_name=%s profile_source=%s channel=%s case=%s target_class=%s",
+        "keysight psd measurement start | timeout_ms=%s cf_mhz=%s span_mhz=%s rbw_hz=%s vbw_hz=%s detector=%s trace_mode=%s average_enabled=%s avg_count=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s profile_name=%s profile_source=%s display_unit=%s canonical_unit=%s channel=%s case=%s target_class=%s",
         timeout_ms,
         _hz_to_mhz(cfg.center_freq_hz),
         _hz_to_mhz(cfg.span_hz),
@@ -499,6 +517,8 @@ def measure_psd_keysight(
         cfg.ref_level_dbm,
         instrument_cfg.get("profile_name", ""),
         instrument_cfg.get("profile_source", ""),
+        _resolve_display_unit(case),
+        PSD_CANONICAL_UNIT,
         getattr(case, "channel", ""),
         getattr(case, "key", ""),
         type(inst).__name__,
@@ -516,11 +536,37 @@ def measure_psd_keysight(
     measured = max(trace_points)
     margin = round(limit - measured, 6)
     verdict = "PASS" if margin >= 0 else "FAIL"
+    display_payload = build_psd_display_payload(
+        canonical_value_dbm_per_mhz=measured,
+        display_unit=_resolve_display_unit(case),
+    )
+    display_limit_payload = build_psd_display_payload(
+        canonical_value_dbm_per_mhz=limit,
+        display_unit=display_payload["display_unit"],
+    )
+    log.info(
+        "keysight psd result canonicalized | case=%s channel=%s measured_dbm_per_mhz=%s limit_dbm_per_mhz=%s margin_db=%s display_value=%s display_limit=%s display_unit=%s canonical_unit=%s",
+        getattr(case, "key", ""),
+        getattr(case, "channel", ""),
+        measured,
+        limit,
+        margin,
+        display_payload["display_value"],
+        display_limit_payload["display_value"],
+        display_payload["display_unit"],
+        display_payload["canonical_unit"],
+    )
     return {
         "measured_value": measured,
         "limit_value": limit,
         "margin_db": margin,
         "measurement_unit": "dBm/MHz",
+        "canonical_measurement_unit": _psd_unit_label(PSD_CANONICAL_UNIT),
+        "psd_result_unit": display_payload["display_unit"],
+        "psd_canonical_unit": display_payload["canonical_unit"],
+        "display_measured_value": display_payload["display_value"],
+        "display_limit_value": display_limit_payload["display_value"],
+        "display_measurement_unit": _psd_unit_label(display_payload["display_unit"]),
         "measurement_source": "keysight_xseries_scpi",
         "backend_reason": detection.get("reason", "idn_match"),
         "backend_idn": detection.get("idn", ""),

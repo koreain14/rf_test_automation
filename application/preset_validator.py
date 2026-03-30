@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from application.preset_model import PresetModel
+from application.psd_unit_policy import PSD_ALLOWED_UNITS, normalize_psd_result_unit
 from application.preset_validation_models import PresetValidationResult
 from application.test_type_symbols import normalize_profile_name
 from application.test_type_symbols import normalize_test_type_list
@@ -88,6 +89,12 @@ class PresetValidator:
                     "Measurement Profile selector differs from per-test Instrument Profiles JSON. "
                     f"Selector={measurement_profile_name}, per-test={conflicting}"
                 )
+
+        psd_result_unit = normalize_psd_result_unit(getattr(sel, "psd_result_unit", ""))
+        if getattr(sel, "psd_result_unit", "") and psd_result_unit not in PSD_ALLOWED_UNITS:
+            result.add_error(
+                f"Unsupported PSD result unit: {sel.psd_result_unit}. Allowed: {sorted(PSD_ALLOWED_UNITS)}"
+            )
 
         if _looks_like_wlan(model):
             self._wlan_validator.validate(model, result)

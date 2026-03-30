@@ -53,6 +53,7 @@ class PresetSelectionModel:
     standard: str = ""
     plan_mode: str = "DEMO"
     measurement_profile_name: str = ""
+    psd_result_unit: str = ""
     test_types: list[str] = field(default_factory=list)
     bandwidth_mhz: list[int] = field(default_factory=list)
     channels: ChannelSelectionModel = field(default_factory=ChannelSelectionModel)

@@ -49,7 +49,7 @@ class StepRunner:
         )
         ctx.values["measurement_profile_source"] = ctx.values["resolved_profile"].get("profile_source", "")
         log.info(
-            "run_case measurement profile resolved | case=%s test_type=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s",
+            "run_case measurement profile resolved | case=%s test_type=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s psd_result_unit=%s",
             getattr(case, "key", ""),
             getattr(case, "test_type", ""),
             requested_profile_name,
@@ -65,6 +65,7 @@ class StepRunner:
             ctx.values["resolved_profile"].get("sweep_time_s", ""),
             ctx.values["resolved_profile"].get("avg_count", ""),
             ctx.values["resolved_profile"].get("average_enabled", ctx.values["resolved_profile"].get("average", "")),
+            dict(getattr(case, "tags", {}) or {}).get("psd_result_unit", ""),
         )
         procedure = self.procedures.get_procedure(case.test_type)
         ctx.values["procedure_name"] = getattr(procedure, "name", case.test_type)

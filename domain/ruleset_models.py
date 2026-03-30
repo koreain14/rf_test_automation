@@ -47,6 +47,7 @@ class BandInfo:
     tests_supported: List[str]
     channel_groups: Dict[str, ChannelGroup]
     device_classes: Optional[List[str]] = None  # 6G에만 존재할 수 있음
+    psd_result_unit: Optional[str] = None
 
     @staticmethod
     def from_dict(band: str, d: Dict[str, Any]) -> "BandInfo":
@@ -80,6 +81,7 @@ class BandInfo:
             tests_supported=[str(x) for x in tests_supported],
             channel_groups=channel_groups,
             device_classes=[str(x) for x in device_classes] if device_classes is not None else None,
+            psd_result_unit=str(d.get("psd_result_unit", "")).strip() or None,
         )
 
 
