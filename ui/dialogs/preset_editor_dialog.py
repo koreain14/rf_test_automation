@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from application.migrations_preset import migrate_preset_to_latest
+from application.measurement_profile_loader import MeasurementProfileLoader
 from application.plan_builders.wlan_plan_builder import WlanPlanBuilder
 from application.preset_model import (
     ChannelSelectionModel,
@@ -41,7 +42,7 @@ from application.preset_model import (
 from application.preset_repo import PresetFileInfo, PresetRepo
 from application.preset_serializer import PresetSerializer
 from application.preset_validator import PresetValidator
-from application.test_type_symbols import DEFAULT_TEST_ORDER, PLAN_FILTER_TEST_TYPES, normalize_test_type_list, normalize_test_type_map
+from application.test_type_symbols import DEFAULT_TEST_ORDER, PLAN_FILTER_TEST_TYPES, default_profile_for_test_type, normalize_profile_name, normalize_test_type_list, normalize_test_type_map
 from ui.preset_editors import WlanExpansionEditor
 
 
@@ -58,6 +59,7 @@ class PresetEditorDialog(QDialog):
         self.plan_repo = plan_repo
         self.project_id = project_id
         self.validator = PresetValidator()
+        self.measurement_profile_loader = MeasurementProfileLoader()
         self._current_file_info: PresetFileInfo | None = None
         self._current_model: PresetModel | None = None
         self._dirty = False
@@ -149,6 +151,7 @@ class PresetEditorDialog(QDialog):
         _connect(self.cb_band.currentTextChanged)
         _connect(self.cb_standard.currentTextChanged)
         _connect(self.cb_plan_mode.currentTextChanged)
+        _connect(self.cb_measurement_profile.currentTextChanged)
         _connect(self.ed_device_class.textChanged)
         _connect(self.ed_profiles_json.textChanged)
         _connect(self.cb_exec_type.currentTextChanged)
@@ -187,6 +190,8 @@ class PresetEditorDialog(QDialog):
         self.cb_standard = QComboBox(); self.cb_standard.setEditable(True)
         self.cb_standard.addItems(["802.11b", "802.11g", "802.11n", "802.11ac", "802.11ax", "BT LE"])
         self.cb_plan_mode = QComboBox(); self.cb_plan_mode.addItems(["DEMO", "Quick", "Worst", "Full"])
+        self.cb_measurement_profile = QComboBox()
+        self.cb_measurement_profile.setEditable(False)
         self.ed_device_class = QLineEdit()
         form.addRow("Name", self.ed_name)
         form.addRow("Description", self.ed_description)
@@ -195,7 +200,9 @@ class PresetEditorDialog(QDialog):
         form.addRow("Band", self.cb_band)
         form.addRow(self.lb_standard, self.cb_standard)
         form.addRow("Plan Mode", self.cb_plan_mode)
+        form.addRow("Measurement Profile", self.cb_measurement_profile)
         form.addRow("Device Class", self.ed_device_class)
+        self._reload_measurement_profile_options()
         self.tabs.addTab(tab, "General")
 
     def _build_wlan_tab(self) -> None:
@@ -295,9 +302,10 @@ class PresetEditorDialog(QDialog):
                 band="2.4G",
                 standard="802.11ax",
                 plan_mode="Quick",
+                measurement_profile_name="",
                 test_types=["PSD", "OBW", "SP", "RX"],
                 execution_policy=ExecutionPolicyModel(type="CHANNEL_CENTRIC", test_order=["PSD", "OBW", "SP", "RX"], include_bw_in_group=True),
-                instrument_profile_by_test={"PSD": "PSD_DEFAULT", "OBW": "OBW_DEFAULT", "SP": "SP_DEFAULT", "RX": "RX_DEFAULT"},
+                instrument_profile_by_test={},
                 wlan_expansion=WlanExpansionModel(
                     mode_plan=[
                         WlanModeRowModel(standard="802.11b", phy_mode="DSSS", bandwidths_mhz=[20]),
@@ -449,6 +457,7 @@ class PresetEditorDialog(QDialog):
             self.cb_band.setCurrentText(sel.band)
             self.cb_standard.setCurrentText(sel.standard)
             self.cb_plan_mode.setCurrentText(sel.plan_mode)
+            self._reload_measurement_profile_options(sel.measurement_profile_name)
             self.ed_device_class.setText(sel.device_class)
             self.ed_profiles_json.setPlainText(json.dumps(sel.instrument_profile_by_test, ensure_ascii=False, indent=2))
             self.cb_exec_type.setCurrentText(sel.execution_policy.type)
@@ -480,6 +489,12 @@ class PresetEditorDialog(QDialog):
 
     def _get_model_from_form(self) -> PresetModel:
         selected_tests = [name for name, cb in self.test_checks.items() if cb.isChecked()]
+        measurement_profile_name = self._selected_measurement_profile_name()
+        instrument_profile_by_test = self._sanitize_instrument_profile_map(
+            measurement_profile_name=measurement_profile_name,
+            selected_tests=selected_tests,
+            raw_map=_parse_json_object(self.ed_profiles_json.toPlainText()),
+        )
         model = PresetModel(
             name=self.ed_name.text().strip(),
             description=self.ed_description.toPlainText().strip(),
@@ -489,13 +504,14 @@ class PresetEditorDialog(QDialog):
                 band=self.cb_band.currentText().strip(),
                 standard=self.cb_standard.currentText().strip(),
                 plan_mode=self.cb_plan_mode.currentText().strip() or "DEMO",
+                measurement_profile_name=measurement_profile_name,
                 test_types=normalize_test_type_list(selected_tests),
                 execution_policy=ExecutionPolicyModel(
                     type=self.cb_exec_type.currentText().strip() or "CHANNEL_CENTRIC",
                     test_order=normalize_test_type_list(_parse_str_csv(self.ed_test_order.text())) or list(DEFAULT_TEST_ORDER),
                     include_bw_in_group=self.chk_include_bw.isChecked(),
                 ),
-                instrument_profile_by_test=normalize_test_type_map(_parse_json_object(self.ed_profiles_json.toPlainText())),
+                instrument_profile_by_test=instrument_profile_by_test,
                 device_class=self.ed_device_class.text().strip(),
                 metadata={},
             ),
@@ -571,6 +587,63 @@ class PresetEditorDialog(QDialog):
 
         std = self.cb_standard.currentText().strip().upper()
         return std.startswith("802.11")
+
+    def _reload_measurement_profile_options(self, selected_name: str | None = None) -> None:
+        current_name = normalize_profile_name(selected_name)
+        self.cb_measurement_profile.blockSignals(True)
+        self.cb_measurement_profile.clear()
+        self.cb_measurement_profile.addItem("(Use Per-Test / Default)", "")
+
+        profile_names: list[str] = []
+        try:
+            profile_names = [normalize_profile_name(doc.name) for doc in self.measurement_profile_loader.list_profiles()]
+        except Exception:
+            profile_names = []
+
+        seen: set[str] = set()
+        for name in profile_names:
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            self.cb_measurement_profile.addItem(name, name)
+
+        if current_name and current_name not in seen:
+            self.cb_measurement_profile.addItem(f"[Missing] {current_name}", current_name)
+
+        idx = self.cb_measurement_profile.findData(current_name)
+        self.cb_measurement_profile.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cb_measurement_profile.blockSignals(False)
+
+    def _selected_measurement_profile_name(self) -> str:
+        data = self.cb_measurement_profile.currentData()
+        if data is not None:
+            return normalize_profile_name(data)
+        return normalize_profile_name(self.cb_measurement_profile.currentText())
+
+    def _sanitize_instrument_profile_map(
+        self,
+        *,
+        measurement_profile_name: str,
+        selected_tests: list[str],
+        raw_map: dict,
+    ) -> dict[str, str]:
+        normalized_map = normalize_test_type_map(raw_map)
+        if not measurement_profile_name:
+            return normalized_map
+
+        sanitized: dict[str, str] = {}
+        for test_type, profile_name in normalized_map.items():
+            normalized_profile_name = normalize_profile_name(profile_name)
+            if not normalized_profile_name:
+                continue
+            if (
+                test_type in normalize_test_type_list(selected_tests)
+                and normalized_profile_name == default_profile_for_test_type(test_type)
+                and normalized_profile_name != measurement_profile_name
+            ):
+                continue
+            sanitized[test_type] = normalized_profile_name
+        return sanitized
 
 
 def _sync_selection_summary_from_wlan_expansion(model: PresetModel) -> None:

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
+
+
+log = logging.getLogger(__name__)
 
 
 class SCPIInstrumentDriver:
@@ -67,6 +71,12 @@ class SCPIInstrumentDriver:
             raise RuntimeError(
                 f"SCPI instrument is not connected: {self._connect_error or self.resource_name}"
             )
+        log.info(
+            "scpi driver write | driver=%s resource=%s command=%s",
+            type(self).__name__,
+            self.resource_name,
+            command,
+        )
         self._session.write(command)
 
     def query(self, command: str) -> str:
@@ -74,7 +84,21 @@ class SCPIInstrumentDriver:
             raise RuntimeError(
                 f"SCPI instrument is not connected: {self._connect_error or self.resource_name}"
             )
-        return str(self._session.query(command))
+        log.info(
+            "scpi driver query | driver=%s resource=%s command=%s",
+            type(self).__name__,
+            self.resource_name,
+            command,
+        )
+        response = str(self._session.query(command))
+        log.info(
+            "scpi driver query response | driver=%s resource=%s command=%s response=%s",
+            type(self).__name__,
+            self.resource_name,
+            command,
+            response.strip(),
+        )
+        return response
 
     def configure(self, settings: Dict[str, Any]) -> None:
         self._last_settings = dict(settings)

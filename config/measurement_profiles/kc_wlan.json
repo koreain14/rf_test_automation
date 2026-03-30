@@ -1,0 +1,29 @@
+{
+  "name": "kc_wlan",
+  "version": 1,
+  "common": {
+    "ref_level_dbm": 18.0
+  },
+  "measurements": {
+    "PSD": {
+      "span_hz": 80000000.0
+    },
+    "OBW": {
+      "trace_mode": "MAX_HOLD",
+      "span_hz": 160000000.0,
+      "detector": "PEAK",
+      "att_db": 10.0,
+      "avg_count": 50,
+      "ref_level_dbm": 10.0
+    },
+    "SP": {
+      "span_hz": 1500000000.0
+    }
+  },
+  "base": "default",
+  "description": "KC WLAN measurement profile overrides built on top of default.",
+  "meta": {
+    "regulation": "KC",
+    "technology": "WLAN"
+  }
+}

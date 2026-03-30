@@ -14,7 +14,7 @@ from application.preset_model import (
     WlanExpansionModel,
     WlanModeRowModel,
 )
-from application.test_type_symbols import DEFAULT_TEST_ORDER, normalize_test_type_list, normalize_test_type_map
+from application.test_type_symbols import DEFAULT_TEST_ORDER, normalize_profile_name, normalize_test_type_list, normalize_test_type_map
 
 
 class PresetSerializer:
@@ -40,6 +40,7 @@ class PresetSerializer:
             band=str(selection_raw.get("band", "")),
             standard=summary_standard,
             plan_mode=str(selection_raw.get("plan_mode", "DEMO")),
+            measurement_profile_name=_resolve_measurement_profile_name(selection_raw),
             test_types=normalize_test_type_list(selection_raw.get("test_types") or []),
             bandwidth_mhz=bandwidth_summary,
             channels=ChannelSelectionModel(
@@ -83,15 +84,24 @@ class PresetSerializer:
         execution_policy["test_order"] = normalize_test_type_list(execution_policy.get("test_order") or []) or list(DEFAULT_TEST_ORDER)
         selection["execution_policy"] = execution_policy
         selection["instrument_profile_by_test"] = normalize_test_type_map(selection.get("instrument_profile_by_test") or {})
+        measurement_profile_name = normalize_profile_name(selection.get("measurement_profile_name") or "")
+        if measurement_profile_name:
+            selection["measurement_profile_name"] = measurement_profile_name
+        else:
+            selection.pop("measurement_profile_name", None)
         wlan_payload = _serialize_wlan_expansion(model.selection.wlan_expansion)
         selection["wlan_expansion"] = wlan_payload
+        metadata = _serialize_selection_metadata(model.selection.metadata, wlan_payload)
+        if metadata:
+            selection["metadata"] = metadata
+        else:
+            selection.pop("metadata", None)
         if model.selection.standard.strip():
             selection["standard"] = model.selection.standard.strip()
         else:
             selection.pop("standard", None)
         selection.pop("bandwidth_mhz", None)
         selection.pop("channels", None)
-        selection.pop("metadata", None)
         out["selection"] = selection
         return out
 
@@ -167,6 +177,15 @@ def _serialize_wlan_expansion(model: WlanExpansionModel | None) -> dict[str, Any
     }
 
 
+def _serialize_selection_metadata(metadata: dict[str, Any] | None, wlan_payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(metadata or {})
+    # WLAN expansion is serialized in its dedicated top-level field.
+    out.pop("wlan_expansion", None)
+    if not out:
+        return {}
+    return out
+
+
 def _derive_standard_summary(model: WlanExpansionModel) -> str:
     standards = []
     for row in model.mode_plan:
@@ -188,6 +207,22 @@ def _derive_bandwidth_summary(model: WlanExpansionModel) -> list[int]:
         if ibw not in out:
             out.append(ibw)
     return sorted(out)
+
+
+def _resolve_measurement_profile_name(selection_raw: dict[str, Any]) -> str:
+    explicit = normalize_profile_name(selection_raw.get("measurement_profile_name") or "")
+    if explicit:
+        return explicit
+
+    per_test = normalize_test_type_map(selection_raw.get("instrument_profile_by_test") or {})
+    values = []
+    for value in per_test.values():
+        name = normalize_profile_name(value)
+        if name and name not in values:
+            values.append(name)
+    if len(values) == 1:
+        return values[0]
+    return ""
 
 
 def _derive_channel_summary(model: WlanExpansionModel) -> list[int]:

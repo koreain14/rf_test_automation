@@ -129,6 +129,15 @@ class RunServiceStep:
                 "run start | project=%s preset=%s run=%s equipment_profile=%s",
                 project_id, preset_id, run_id, equipment_profile_name or "(none)"
             )
+            log.info(
+                "run preset source | run=%s preset_id=%s preset_name=%s source=db:preset_json shared_profile=%s recipe_effective_profiles=%s recipe_selected_profiles=%s",
+                run_id,
+                preset_id,
+                str((recipe.meta or {}).get("preset_name") or ""),
+                str((recipe.meta or {}).get("measurement_profile_name") or ""),
+                dict((recipe.meta or {}).get("effective_measurement_profile_by_test") or {}),
+                dict((recipe.meta or {}).get("measurement_profile_by_test") or {}),
+            )
 
             ordered_case_keys = [str(k or "") for k in (selected_case_keys or []) if str(k or "")]
             if ordered_case_keys:

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from application.executors.base_executor import BaseExecutor
+from application.measurement_profile_runtime import build_consumable_measurement_profile
 from application.measurements.keysight_obw_helper import KeysightObwConfig, mock_obw_measurement
 from domain.execution import MeasurementStep, RunContext, StepExecutionResult
 
 
 class ObwExecutor(BaseExecutor):
     def execute(self, step: MeasurementStep, context: RunContext) -> StepExecutionResult:
-        profile = dict(step.metadata.get("resolved_profile") or step.parameters or {})
+        profile = build_consumable_measurement_profile(
+            test_type=step.test_type,
+            resolved_profile=dict(step.metadata.get("resolved_profile") or {}),
+            instrument_snapshot=dict(step.parameters or {}),
+        )
         span_hz = profile.get("span_hz") or max(int((step.bandwidth_mhz or 20) * 2_000_000), 10_000_000)
         cfg = KeysightObwConfig(
             center_freq_hz=float(step.frequency_mhz or 0.0) * 1_000_000.0,

@@ -9,8 +9,9 @@ class ConfigureInstrumentStep:
 
     def run(self, ctx: CaseContext, inst) -> StepResult:
         try:
-            inst.configure(ctx.case.instrument)  # case.instrument snapshot 사용
-            ctx.values["instrument_used"] = dict(ctx.case.instrument)
+            settings = dict(ctx.values.get("resolved_profile") or getattr(ctx.case, "instrument", {}) or {})
+            inst.configure(settings)
+            ctx.values["instrument_used"] = dict(settings)
             return StepResult(step_name=self.name, status="OK")
         except Exception as e:
             return StepResult(step_name=self.name, status="ERROR", message=str(e))
@@ -30,8 +31,7 @@ class AcquireTraceStep:
 
 class ComputeMetricsStep:
     """
-    test_type별로 계산이 달라야 하므로, 일단 MVP는 간단히 test_type switch로 시작
-    나중에는 PSDComputeStep/OBWComputeStep로 쪼개면 됨.
+    test_type별 계산 로직은 향후 분리 가능하지만, 현재는 최소 공통 구현을 유지한다.
     """
     name = "COMPUTE"
 
@@ -42,14 +42,12 @@ class ComputeMetricsStep:
             if not trace:
                 return StepResult(step_name=self.name, status="ERROR", message="No trace")
 
-            # MVP 계산(가짜)
-            measured = max(trace)  # peak
+            measured = max(trace)
             ctx.values["measured_value"] = measured
 
-            # 가짜 limit (나중엔 ruleset/limit 테이블로)
             limit = -30.0 if test_type == "PSD" else -20.0
             ctx.values["limit_value"] = limit
-            ctx.values["margin_db"] = limit - measured  # measured가 높으면 margin 음수
+            ctx.values["margin_db"] = limit - measured
 
             return StepResult(step_name=self.name, status="OK", data={
                 "measured_value": measured,

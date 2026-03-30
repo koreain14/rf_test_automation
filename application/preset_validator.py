@@ -4,6 +4,7 @@ from typing import Iterable
 
 from application.preset_model import PresetModel
 from application.preset_validation_models import PresetValidationResult
+from application.test_type_symbols import normalize_profile_name
 from application.test_type_symbols import normalize_test_type_list
 from application.preset_validators.wlan_validator import WlanPresetValidator
 
@@ -74,6 +75,19 @@ class PresetValidator:
             result.add_warning(
                 f"Execution order does not include selected test types: {missing_exec}. Default runner order may differ."
             )
+
+        measurement_profile_name = normalize_profile_name(sel.measurement_profile_name)
+        if measurement_profile_name:
+            conflicting = sorted({
+                normalize_profile_name(name)
+                for name in sel.instrument_profile_by_test.values()
+                if normalize_profile_name(name) and normalize_profile_name(name) != measurement_profile_name
+            })
+            if conflicting:
+                result.add_warning(
+                    "Measurement Profile selector differs from per-test Instrument Profiles JSON. "
+                    f"Selector={measurement_profile_name}, per-test={conflicting}"
+                )
 
         if _looks_like_wlan(model):
             self._wlan_validator.validate(model, result)

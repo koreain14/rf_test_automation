@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +21,9 @@ from application.test_type_symbols import (
 from domain.ruleset_models import BandInfo, PlanMode  # 경로는 너 프로젝트에 맞게
 
 
+
+
+log = logging.getLogger(__name__)
 
 
 class PlanService:
@@ -140,6 +144,15 @@ class PlanService:
 
         self.validate_preset_against_ruleset(preset, ruleset)
 
+        selection = dict(preset.selection or {})
+        log.info(
+            "build_recipe_from_preset | preset_id=%s preset_name=%s ruleset=%s shared_profile=%s per_test_profiles=%s source=db:preset_json",
+            preset_id,
+            preset.name,
+            preset.ruleset_id,
+            selection.get("measurement_profile_name", ""),
+            selection.get("instrument_profile_by_test", {}),
+        )
         recipe = build_recipe(ruleset, preset)
         overrides = self.load_override_objs(preset_id) or []
         return ruleset, preset, recipe, overrides
@@ -446,6 +459,16 @@ class PlanService:
         if changed:
             self.repo.update_preset_json(preset_id=preset_id, preset_json=migrated)
 
+        selection = dict(migrated.get("selection") or {})
+        log.info(
+            "load_preset_obj | preset_id=%s preset_name=%s ruleset=%s shared_profile=%s per_test_profiles=%s source=db:preset_json migrated=%s",
+            preset_id,
+            migrated.get("name", ""),
+            migrated.get("ruleset_id", ""),
+            selection.get("measurement_profile_name", ""),
+            selection.get("instrument_profile_by_test", {}),
+            changed,
+        )
         return Preset(
             name=migrated["name"],
             ruleset_id=migrated["ruleset_id"],

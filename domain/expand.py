@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 from application.test_type_symbols import (
@@ -12,18 +13,25 @@ from application.test_type_symbols import (
 from .models import InstrumentProfile, Preset, Recipe, RuleSet, TestCase
 from .ruleset_models import BandInfo, ChannelGroup
 
+log = logging.getLogger(__name__)
+
 
 def center_freq_mhz_from_channel_5g(ch: int) -> float:
     return 5000 + 5 * ch
 
 
-def _resolve_profile_name_for_test_type(ip_map: Dict[str, Any], test_type: str) -> str:
+def _resolve_profile_name_for_test_type(
+    ip_map: Dict[str, Any],
+    shared_profile_name: str,
+    test_type: str,
+) -> str:
     """
     Resolve a profile name using one consistent contract:
-    preset override first, shared test-type defaults second.
+    preset per-test override first, shared selector second, shared defaults last.
     """
     profile_name = str(
         ip_map.get(test_type)
+        or shared_profile_name
         or default_profile_for_test_type(test_type)
         or "PSD_DEFAULT"
     ).strip()
@@ -70,6 +78,13 @@ def _extract_wlan_expansion(selection: Dict[str, Any]) -> Dict[str, Any]:
         return wlan
     meta = dict(selection.get("metadata") or {})
     return dict(meta.get("wlan_expansion") or {})
+
+
+def _extract_runtime_meta(selection: Dict[str, Any]) -> Dict[str, Any]:
+    meta = dict(selection.get("metadata") or {})
+    # WLAN expansion is normalized separately into recipe.meta["wlan_expansion"].
+    meta.pop("wlan_expansion", None)
+    return meta
 
 
 def _derive_standard_summary(wlan: Dict[str, Any]) -> str:
@@ -130,8 +145,10 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     band = str(sel.get("band", "")).strip()
     plan_mode = str(sel.get("plan_mode", "Quick")).strip() or "Quick"
     test_types = normalize_test_type_list(sel.get("test_types") or [])
+    shared_profile_name = normalize_profile_name(sel.get("measurement_profile_name") or "")
 
     wlan = _extract_wlan_expansion(sel)
+    runtime_meta = _extract_runtime_meta(sel)
     standard = str(sel.get("standard", "")).strip()
     bw_list = [int(x) for x in (sel.get("bandwidth_mhz") or [])]
     channel_policy = dict(sel.get("channels") or {})
@@ -146,16 +163,31 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
 
     ip_by_test: Dict[str, InstrumentProfile] = {}
     ip_map = normalize_test_type_map(sel.get("instrument_profile_by_test") or {})
+    effective_profile_map: Dict[str, str] = {}
+    selector_fallback_tests: List[str] = []
     for t in test_types:
-        prof_name = _resolve_profile_name_for_test_type(ip_map, t)
+        prof_name = _resolve_profile_name_for_test_type(ip_map, shared_profile_name, t)
+        effective_profile_map[t] = prof_name
+        if shared_profile_name and not normalize_profile_name(ip_map.get(t) or ""):
+            selector_fallback_tests.append(t)
         ip = ruleset.instrument_profiles.get(prof_name)
         if ip is None:
-            raise ValueError(f"Instrument profile not found for test '{t}': {prof_name}")
-        ip_by_test[t] = ip
+            ip_by_test[t] = InstrumentProfile(
+                name=prof_name,
+                settings={"profile_name": prof_name},
+            )
+        else:
+            settings = dict(ip.settings or {})
+            settings.setdefault("profile_name", prof_name)
+            ip_by_test[t] = InstrumentProfile(name=ip.name, settings=settings)
 
     meta = {
+        **runtime_meta,
         "preset_name": preset.name,
         "wlan_expansion": wlan,
+        "measurement_profile_name": shared_profile_name,
+        "measurement_profile_by_test": dict(ip_map),
+        "effective_measurement_profile_by_test": dict(effective_profile_map),
     }
     pol = dict(sel.get("execution_policy") or {})
     if pol:
@@ -167,6 +199,29 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             "test_order": list(DEFAULT_TEST_ORDER),
             "include_bw_in_group": True,
         }
+
+    if shared_profile_name:
+        conflicts = sorted(
+            f"{test_type}:{normalize_profile_name(profile_name)}"
+            for test_type, profile_name in ip_map.items()
+            if normalize_profile_name(profile_name) and normalize_profile_name(profile_name) != shared_profile_name
+        )
+        log.info(
+            "build_recipe measurement profile selection | preset=%s shared_profile=%s per_test=%s effective=%s selector_fallback_tests=%s conflicts=%s",
+            preset.name,
+            shared_profile_name,
+            dict(ip_map),
+            dict(effective_profile_map),
+            selector_fallback_tests,
+            conflicts,
+        )
+    else:
+        log.info(
+            "build_recipe measurement profile selection | preset=%s shared_profile=(empty) per_test=%s effective=%s",
+            preset.name,
+            dict(ip_map),
+            dict(effective_profile_map),
+        )
 
     return Recipe(
         ruleset_id=ruleset.id,
@@ -239,6 +294,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                                 "preset": recipe.meta.get("preset_name", ""),
                                 "group": find_group(ch),
                                 "phy_mode": phy_mode,
+                                "measurement_profile_name": ip.name,
                             },
                             key=key,
                         )
@@ -300,6 +356,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                         "plan_mode": recipe.plan_mode,
                         "preset": recipe.meta.get("preset_name", ""),
                         "group": find_group(ch),
+                        "measurement_profile_name": ip.name,
                     },
                     key=key,
                 )

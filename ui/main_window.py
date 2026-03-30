@@ -34,6 +34,7 @@ from ui.tabs.plan_tab import PlanTab
 from ui.tabs.instrument_settings_tab import InstrumentSettingsTab
 from ui.tabs.device_manager_tab import DeviceManagerTab
 from ui.tabs.equipment_profile_tab import EquipmentProfileTab
+from ui.tabs.measurement_profile_tab import MeasurementProfileTab
 from ui.tabs.manual_motion_tab import ManualMotionTab
 from ui.plan_context import PlanContext
 from ui.controllers import PlanController, RunController, ScenarioController
@@ -291,6 +292,9 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         tabs.addTab(self.equipment_profile_widget, "Equipment Profile")
+
+        self.measurement_profile_widget = MeasurementProfileTab(parent=self)
+        tabs.addTab(self.measurement_profile_widget, "Measurement Profile")
 
         self.manual_motion_widget = ManualMotionTab(
             instrument_manager=self._runtime_instrument_manager(),

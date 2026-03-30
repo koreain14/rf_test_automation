@@ -93,6 +93,12 @@ class RunSessionCoordinator:
         if motion_control:
             run_meta["motion_control"] = dict(motion_control)
         run_meta["dut_control_mode"] = dut_control_mode
+        if recipe is not None:
+            run_meta["measurement_profile_by_test"] = {
+                str(test_type): str(getattr(profile, "name", "") or "")
+                for test_type, profile in dict(getattr(recipe, "instrument_profile_by_test", {}) or {}).items()
+            }
+            run_meta["measurement_profile_source"] = "recipe.instrument_profile_by_test"
 
         return RunEnvironment(
             session=session,
@@ -342,6 +348,12 @@ class RunMetadataRecorder:
         )
 
     def _build_execution_case_payload(self, case, ruleset) -> dict[str, Any]:
+        instrument_snapshot = dict(case.instrument or {})
+        profile_name = str(
+            instrument_snapshot.get("profile_name")
+            or dict(case.tags or {}).get("measurement_profile_name")
+            or ""
+        )
         return {
             "id": case.key,
             "case_id": case.key,
@@ -355,7 +367,8 @@ class RunMetadataRecorder:
             "channel": case.channel,
             "frequency_mhz": case.center_freq_mhz,
             "test_type": case.test_type,
-            "instrument": dict(case.instrument or {}),
+            "instrument_profile_name": profile_name,
+            "instrument": instrument_snapshot,
             "tags": dict(case.tags or {}),
         }
 
@@ -416,8 +429,13 @@ class RunMetadataRecorder:
                 "profile_name": step.instrument_profile_name,
             }
             try:
-                resolved = self.instrument_profile_resolver.resolve(step.instrument_profile_name)
+                resolved = self.instrument_profile_resolver.resolve_for_test_type(
+                    step.instrument_profile_name,
+                    step.test_type,
+                )
                 step.metadata["resolved_profile"] = resolved
+                item["resolved_profile_name"] = resolved.get("profile_name", step.instrument_profile_name)
+                item["resolved_profile_source"] = resolved.get("profile_source", "")
                 item["profile"] = resolved
             except Exception as exc:
                 item.update({"status": "PROFILE_ERROR", "message": str(exc)})

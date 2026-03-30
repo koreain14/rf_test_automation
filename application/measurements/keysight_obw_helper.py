@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any, Dict, Iterator, Tuple
 
+from application.measurement_profile_runtime import build_consumable_measurement_profile
+
 log = logging.getLogger(__name__)
 
 
@@ -56,6 +58,8 @@ DEFAULT_SWEEP_POINTS = 1001
 DEFAULT_POLL_INTERVAL_S = 0.1
 DEFAULT_MAX_WAIT_S = 60.0
 DEFAULT_FETCH_POLL_TIMEOUT_MS = 500
+DEFAULT_MODE_SETTLE_S = 0.05
+DEFAULT_POST_CONFIG_SETTLE_S = 0.02
 
 
 def _iter_timeout_targets(obj: Any) -> Iterator[Any]:
@@ -194,7 +198,8 @@ def _safe_write(inst: Any, cmd: str) -> None:
     try:
         inst.write(cmd)
     except Exception:
-        log.exception("keysight obw SCPI write failed | cmd=%s", cmd)
+        system_error = _read_system_error_best_effort(inst)
+        log.exception("keysight obw SCPI write failed | cmd=%s system_error=%s", cmd, system_error)
         raise
 
 
@@ -202,12 +207,20 @@ def _safe_query(inst: Any, cmd: str) -> str:
     try:
         return str(inst.query(cmd) or "").strip()
     except Exception:
-        log.exception("keysight obw SCPI query failed | cmd=%s", cmd)
+        system_error = _read_system_error_best_effort(inst)
+        log.exception("keysight obw SCPI query failed | cmd=%s system_error=%s", cmd, system_error)
         raise
 
 
 def _quiet_query(inst: Any, cmd: str) -> str:
     return str(inst.query(cmd) or "").strip()
+
+
+def _read_system_error_best_effort(inst: Any) -> str:
+    try:
+        return str(inst.query("SYST:ERR?") or "").strip()
+    except Exception:
+        return ""
 
 
 @contextmanager
@@ -240,18 +253,19 @@ def _normalize_detector(value: Any) -> str:
         "POS": "POS",
         "NEGATIVE": "NEG",
         "NEG": "NEG",
-        "PEAK": "PEAK",
+        # UI/profile-level "PEAK" should be emitted as the analyzer's positive-peak SCPI token.
+        "PEAK": "POS",
         "SAMPLE": "SAMP",
         "SAMP": "SAMP",
         "RMS": "RMS",
         "AVERAGE": "AVER",
         "AVER": "AVER",
     }
-    return aliases.get(detector, "PEAK")
+    return aliases.get(detector, "POS")
 
 
 def _normalize_trace_mode(value: Any) -> str:
-    mode = str(value or "MAXHOLD").strip().upper().replace(" ", "")
+    mode = str(value or "MAXHOLD").strip().upper().replace(" ", "").replace("_", "").replace("/", "")
     aliases = {
         "MAXHOLD": "MAXH",
         "MAXH": "MAXH",
@@ -260,7 +274,6 @@ def _normalize_trace_mode(value: Any) -> str:
         "WRITE": "WRIT",
         "WRIT": "WRIT",
         "CLEARWRITE": "WRIT",
-        "CLEAR/WRITE": "WRIT",
     }
     return aliases.get(mode, "WRIT")
 
@@ -342,10 +355,41 @@ def _cfg_has_any(cfg: Dict[str, Any], *keys: str) -> bool:
     return any(cfg.get(key) not in (None, "") for key in keys)
 
 
-def _build_runtime_config(case: Any) -> KeysightObwConfig:
+def _settle_seconds_from_cfg(cfg: Dict[str, Any], key: str, default: float) -> float:
+    return max(0.0, _as_float(cfg.get(key), default))
+
+
+def _obw_average_enabled(instrument_cfg: Dict[str, Any], cfg: KeysightObwConfig) -> bool:
+    for key in ("average_enabled", "obw_average_enabled", "average", "obw_average"):
+        if instrument_cfg.get(key) not in (None, ""):
+            return _as_bool(instrument_cfg.get(key), True)
+    return int(cfg.avg_count or 0) > 1
+
+
+def _sync_stage(inst: Any, stage: str, *, fallback_sleep_s: float = 0.0) -> None:
+    try:
+        response = _query_stage(inst, f"{stage}_opc", "*OPC?")
+        log.info("keysight obw SCPI sync | stage=%s opc=%s", stage, response)
+        return
+    except Exception as exc:
+        log.info(
+            "keysight obw SCPI sync fallback | stage=%s fallback_sleep_s=%s err=%s",
+            stage,
+            fallback_sleep_s,
+            exc,
+        )
+    if fallback_sleep_s > 0.0:
+        time.sleep(float(fallback_sleep_s))
+
+
+def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = None) -> KeysightObwConfig:
     center_freq_mhz = _as_float(getattr(case, "center_freq_mhz", 0.0), 0.0)
     bw_mhz = _as_float(getattr(case, "bw_mhz", 20.0), 20.0)
-    instrument_cfg = dict(getattr(case, "instrument", {}) or {})
+    instrument_cfg = build_consumable_measurement_profile(
+        test_type=getattr(case, "test_type", ""),
+        resolved_profile=dict(profile_settings or {}),
+        instrument_snapshot=dict(getattr(case, "instrument", {}) or {}),
+    )
 
     span_hz = _resolve_hz(
         instrument_cfg,
@@ -370,13 +414,30 @@ def _build_runtime_config(case: Any) -> KeysightObwConfig:
     vbw_auto_default = not _cfg_has_any(instrument_cfg, "vbw_hz", "vbw_mhz")
     sweep_auto_default = False
 
+    raw_detector = instrument_cfg.get("detector", "PEAK")
+    raw_trace_mode = instrument_cfg.get("trace_mode", "MAXHOLD")
+    normalized_detector = _normalize_detector(raw_detector)
+    normalized_trace_mode = _normalize_trace_mode(raw_trace_mode)
+
+    log.info(
+        "keysight obw profile normalization | case=%s test_type=%s profile_name=%s profile_source=%s raw_trace_mode=%s normalized_trace_mode=%s raw_detector=%s normalized_detector=%s",
+        getattr(case, "key", ""),
+        getattr(case, "test_type", ""),
+        instrument_cfg.get("profile_name", ""),
+        instrument_cfg.get("profile_source", ""),
+        raw_trace_mode,
+        normalized_trace_mode,
+        raw_detector,
+        normalized_detector,
+    )
+
     return KeysightObwConfig(
         center_freq_hz=center_freq_mhz * 1e6,
         span_hz=span_hz,
         rbw_hz=rbw_hz,
         vbw_hz=vbw_hz,
-        detector=_normalize_detector(instrument_cfg.get("detector", "PEAK")),
-        trace_mode=_normalize_trace_mode(instrument_cfg.get("trace_mode", "MAXHOLD")),
+        detector=normalized_detector,
+        trace_mode=normalized_trace_mode,
         sweep_time_s=_as_float(instrument_cfg.get("sweep_time_s"), DEFAULT_SWEEP_TIME_S),
         rbw_auto=_as_bool(instrument_cfg.get("rbw_auto"), rbw_auto_default),
         vbw_auto=_as_bool(instrument_cfg.get("vbw_auto"), vbw_auto_default),
@@ -401,6 +462,59 @@ def _query_stage(inst: Any, stage: str, cmd: str) -> str:
     return _safe_query(inst, cmd)
 
 
+def _best_effort_query_candidates(inst: Any, *, stage: str, commands: Tuple[str, ...]) -> Tuple[str, str]:
+    last_error = ""
+    for cmd in commands:
+        try:
+            response = _query_stage(inst, stage, cmd)
+            return cmd, response
+        except Exception as exc:
+            last_error = str(exc)
+            log.info(
+                "keysight obw SCPI readback candidate failed | stage=%s cmd=%s err=%s",
+                stage,
+                cmd,
+                exc,
+            )
+    return "", last_error
+
+
+def _log_obw_apply_readback(inst: Any) -> None:
+    trace_cmd, trace_response = _best_effort_query_candidates(
+        inst,
+        stage="trace_readback",
+        commands=(
+            ":TRAC1:OBW:TYPE?",
+            ":TRAC:OBW:TYPE?",
+        ),
+    )
+    detector_cmd, detector_response = _best_effort_query_candidates(
+        inst,
+        stage="detector_readback",
+        commands=(
+            ":OBW:DET?",
+            ":DET?",
+        ),
+    )
+    average_cmd, average_response = _best_effort_query_candidates(
+        inst,
+        stage="average_readback",
+        commands=(
+            ":OBW:AVER?",
+            ":AVER?",
+        ),
+    )
+    log.info(
+        "keysight obw apply readback | trace_cmd=%s trace_response=%s detector_cmd=%s detector_response=%s average_cmd=%s average_response=%s",
+        trace_cmd,
+        trace_response,
+        detector_cmd,
+        detector_response,
+        average_cmd,
+        average_response,
+    )
+
+
 def _estimated_wait_seconds(cfg: KeysightObwConfig, instrument_cfg: Dict[str, Any]) -> float:
     configured = instrument_cfg.get("measurement_wait_s")
     if configured not in (None, ""):
@@ -421,14 +535,21 @@ def _estimated_fetch_poll_timeout_ms(instrument_cfg: Dict[str, Any], request_tim
     return max(100, min(int(request_timeout_ms or DEFAULT_FETCH_POLL_TIMEOUT_MS), DEFAULT_FETCH_POLL_TIMEOUT_MS))
 
 
-def _configure_obw_measurement(inst: Any, cfg: KeysightObwConfig) -> None:
+def _configure_obw_measurement(
+    inst: Any,
+    cfg: KeysightObwConfig,
+    instrument_cfg: Dict[str, Any] | None = None,
+    *,
+    mode_settle_s: float = DEFAULT_MODE_SETTLE_S,
+    post_config_settle_s: float = DEFAULT_POST_CONFIG_SETTLE_S,
+) -> None:
+    average_enabled = _obw_average_enabled(dict(instrument_cfg or {}), cfg)
     commands = [
         ("prepare", "*CLS"),
         ("prepare", ":INIT:CONT OFF"),
         ("prepare", ":ABOR"),
         ("mode", ":CONF:OBW"),
-        ("average", ":OBW:AVER ON"),
-        ("average", f":OBW:AVER:COUN {_as_int(cfg.avg_count, DEFAULT_AVG_COUNT)}"),
+        ("average", f":OBW:AVER {_format_scpi_bool(average_enabled)}"),
         ("frequency", f":FREQ:CENT {_format_scpi_value(_hz_to_mhz(cfg.center_freq_hz))}MHZ"),
         ("span", f":OBW:FREQ:SPAN {_format_scpi_value(_hz_to_mhz(cfg.span_hz))}MHZ"),
         ("rbw", f":OBW:BAND:RES {_format_scpi_value(_hz_to_mhz(cfg.rbw_hz))}MHZ"),
@@ -441,11 +562,42 @@ def _configure_obw_measurement(inst: Any, cfg: KeysightObwConfig) -> None:
         ("sweep_points", f":SWE:POIN {_as_int(cfg.sweep_points, DEFAULT_SWEEP_POINTS)}"),
         ("atten", f":POW:ATT {_format_scpi_value(cfg.atten_db)}DB"),
         ("display", f":DISP:OBW:VIEW:WIND:TRAC:Y:RLEV {_format_scpi_value(cfg.ref_level_dbm)}DBM"),
-        ("detector", f":OBW:DET {cfg.detector}"),
         ("trace", f":TRAC1:OBW:TYPE {cfg.trace_mode}"),
+        ("detector", f":OBW:DET {cfg.detector}"),
+        
     ]
+    if average_enabled:
+        commands.insert(5, ("average", f":OBW:AVER:COUN {_as_int(cfg.avg_count, DEFAULT_AVG_COUNT)}"))
+    log.info(
+        "keysight obw configure apply | trace_mode=%s detector=%s average_enabled=%s avg_count=%s mode_settle_s=%s post_config_settle_s=%s",
+        cfg.trace_mode,
+        cfg.detector,
+        average_enabled,
+        cfg.avg_count,
+        mode_settle_s,
+        post_config_settle_s,
+    )
     for stage, cmd in commands:
         _write_stage(inst, stage, cmd)
+        if stage == "trace":
+            log.info(
+                "keysight obw inter-command settle | after_stage=%s before_stage=%s sleep_s=1.0",
+                "trace",
+                "detector",
+            )
+            time.sleep(1.0)
+        if cmd == ":ABOR":
+            _sync_stage(inst, "post_abort", fallback_sleep_s=mode_settle_s)
+        elif cmd == ":CONF:OBW":
+            _sync_stage(inst, "post_conf_obw", fallback_sleep_s=mode_settle_s)
+            log.info(
+                "keysight obw inter-command settle | after_stage=%s before_stage=%s sleep_s=1.0",
+                "mode",
+                "average",
+            )
+            time.sleep(1.0)
+    _sync_stage(inst, "post_obw_config", fallback_sleep_s=post_config_settle_s)
+    _log_obw_apply_readback(inst)
 
 
 def _fetch_obw_hz(inst: Any) -> float:
@@ -513,24 +665,41 @@ def _acquire_obw_hz(inst: Any, *, max_wait_s: float, fetch_poll_timeout_ms: int)
     )
 
 
-def measure_obw_keysight(source: Any, case: Any, *, timeout_ms: int = 5000, retries: int = 1) -> Dict[str, Any]:
+def measure_obw_keysight(
+    source: Any,
+    case: Any,
+    *,
+    timeout_ms: int = 5000,
+    retries: int = 1,
+    profile_settings: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     detection = detect_keysight_xseries_analyzer(source)
     if not detection.get("usable"):
         raise RuntimeError(f"Keysight analyzer unavailable: {detection.get('reason', 'unknown')}")
 
     inst = detection["target"]
-    cfg = _build_runtime_config(case)
+    instrument_cfg = build_consumable_measurement_profile(
+        test_type=getattr(case, "test_type", ""),
+        resolved_profile=dict(profile_settings or {}),
+        instrument_snapshot=dict(getattr(case, "instrument", {}) or {}),
+    )
+    cfg = _build_runtime_config(case, profile_settings=instrument_cfg)
     bw_mhz = _as_float(getattr(case, "bw_mhz", 20.0), 20.0)
-    instrument_cfg = dict(getattr(case, "instrument", {}) or {})
     max_wait_s = _estimated_wait_seconds(cfg, instrument_cfg)
     fetch_poll_timeout_ms = _estimated_fetch_poll_timeout_ms(instrument_cfg, timeout_ms)
+    mode_settle_s = _settle_seconds_from_cfg(instrument_cfg, "mode_settle_s", DEFAULT_MODE_SETTLE_S)
+    post_config_settle_s = _settle_seconds_from_cfg(
+        instrument_cfg,
+        "post_config_settle_s",
+        DEFAULT_POST_CONFIG_SETTLE_S,
+    )
 
     last_exc = None
     last_stage = "startup"
     for attempt in range(1, retries + 1):
         try:
             log.info(
-                "keysight obw measurement start | attempt=%s/%s timeout_ms=%s max_wait_s=%s fetch_poll_timeout_ms=%s cf_mhz=%s span_mhz=%s rbw_auto=%s rbw_mhz=%s vbw_auto=%s vbw_mhz=%s sweep_auto=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s detector=%s avg_count=%s trace_mode=%s",
+                "keysight obw measurement start | attempt=%s/%s timeout_ms=%s max_wait_s=%s fetch_poll_timeout_ms=%s cf_mhz=%s span_mhz=%s rbw_auto=%s rbw_mhz=%s vbw_auto=%s vbw_mhz=%s sweep_auto=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s detector=%s avg_count=%s trace_mode=%s profile_name=%s profile_source=%s channel=%s case=%s target_class=%s",
                 attempt,
                 retries,
                 timeout_ms,
@@ -549,10 +718,21 @@ def measure_obw_keysight(source: Any, case: Any, *, timeout_ms: int = 5000, retr
                 cfg.detector,
                 cfg.avg_count,
                 cfg.trace_mode,
+                instrument_cfg.get("profile_name", ""),
+                instrument_cfg.get("profile_source", ""),
+                getattr(case, "channel", ""),
+                getattr(case, "key", ""),
+                type(inst).__name__,
             )
             with _temporary_timeout(inst, timeout_ms):
                 last_stage = "configure"
-                _configure_obw_measurement(inst, cfg)
+                _configure_obw_measurement(
+                    inst,
+                    cfg,
+                    instrument_cfg=instrument_cfg,
+                    mode_settle_s=mode_settle_s,
+                    post_config_settle_s=post_config_settle_s,
+                )
                 last_stage = "acquire"
                 measured_hz = _acquire_obw_hz(
                     inst,
@@ -572,6 +752,9 @@ def measure_obw_keysight(source: Any, case: Any, *, timeout_ms: int = 5000, retr
                 "measurement_source": "keysight_xseries_scpi",
                 "backend_reason": detection.get("reason", "idn_match"),
                 "backend_idn": detection.get("idn", ""),
+                "measurement_profile_name": instrument_cfg.get("profile_name", ""),
+                "measurement_profile_source": instrument_cfg.get("profile_source", ""),
+                "measurement_profile_test_type": instrument_cfg.get("test_type", ""),
                 "scpi_timeout_ms": int(timeout_ms),
                 "scpi_max_wait_s": float(max_wait_s),
                 "scpi_fetch_poll_timeout_ms": int(fetch_poll_timeout_ms),

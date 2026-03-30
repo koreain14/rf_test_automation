@@ -1,0 +1,48 @@
+{
+  "name": "default",
+  "version": 1,
+  "description": "Baseline measurement profile defaults for analyzer preview and execution settings.",
+  "common": {
+    "ref_level_dbm": 20
+  },
+  "measurements": {
+    "PSD": {
+      "span_hz": 100000000,
+      "rbw_hz": 100000,
+      "vbw_hz": 300000,
+      "trace_mode": "AVERAGE",
+      "detector": "RMS"
+    },
+    "OBW": {
+      "span_hz": 100000000,
+      "rbw_hz": 100000,
+      "vbw_hz": 300000,
+      "trace_mode": "CLEAR_WRITE",
+      "detector": "POSITIVE"
+    },
+    "SP": {
+      "span_hz": 1000000000,
+      "rbw_hz": 1000000,
+      "vbw_hz": 3000000,
+      "trace_mode": "MAX_HOLD",
+      "detector": "POSITIVE"
+    },
+    "RX": {
+      "span_hz": 1000000000,
+      "rbw_hz": 1000000,
+      "vbw_hz": 3000000,
+      "trace_mode": "MAX_HOLD",
+      "detector": "POSITIVE"
+    },
+    "CHANNEL_POWER": {
+      "span_hz": 100000000,
+      "rbw_hz": 100000,
+      "vbw_hz": 300000,
+      "trace_mode": "CLEAR_WRITE",
+      "detector": "RMS"
+    }
+  },
+  "meta": {
+    "family": "baseline"
+  }
+}

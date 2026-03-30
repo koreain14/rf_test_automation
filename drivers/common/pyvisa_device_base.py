@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
+
+
+log = logging.getLogger(__name__)
 
 
 class PyVisaDeviceBase:
@@ -50,12 +54,32 @@ class PyVisaDeviceBase:
     def write(self, cmd: str) -> None:
         if not self.inst:
             raise RuntimeError(self._last_connect_error or "Device not connected")
+        log.info(
+            "pyvisa device write | driver=%s resource=%s command=%s",
+            type(self).__name__,
+            self.resource,
+            cmd,
+        )
         self.inst.write(cmd)
 
     def query(self, cmd: str) -> str:
         if not self.inst:
             raise RuntimeError(self._last_connect_error or "Device not connected")
-        return str(self.inst.query(cmd))
+        log.info(
+            "pyvisa device query | driver=%s resource=%s command=%s",
+            type(self).__name__,
+            self.resource,
+            cmd,
+        )
+        response = str(self.inst.query(cmd))
+        log.info(
+            "pyvisa device query response | driver=%s resource=%s command=%s response=%s",
+            type(self).__name__,
+            self.resource,
+            cmd,
+            response.strip(),
+        )
+        return response
 
     def query_idn(self) -> str:
         return self.query("*IDN?")

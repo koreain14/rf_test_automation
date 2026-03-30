@@ -1,11 +1,18 @@
 # application/runner_step.py
 from __future__ import annotations
+import logging
 from typing import Callable, Iterable, Optional, Tuple
 
-from domain.models import TestCase
-from domain.steps import CaseContext
+from application.instrument_profile_resolver import InstrumentProfileResolver
+from application.measurement_profile_runtime import build_consumable_measurement_profile
 from application.procedures import ProcedureRegistry
 from application.steps_dut import DutConfigureStep
+from application.test_type_symbols import default_profile_for_test_type
+from application.test_type_symbols import normalize_profile_name
+from domain.models import TestCase
+from domain.steps import CaseContext
+
+log = logging.getLogger(__name__)
 
 
 def _dut_group_key(c: TestCase) -> Tuple:
@@ -17,9 +24,48 @@ class StepRunner:
     def __init__(self, procedures: ProcedureRegistry, sink):
         self.procedures = procedures
         self.sink = sink  # sink.write(result_id, StepResult)
+        self.profile_resolver = InstrumentProfileResolver()
 
     def run_case(self, result_id: str, case, inst) -> dict:
         ctx = CaseContext(case=case)
+        instrument_snapshot = dict(getattr(case, "instrument", {}) or {})
+        requested_profile_name = normalize_profile_name(
+            instrument_snapshot.get("profile_name")
+            or dict(getattr(case, "tags", {}) or {}).get("measurement_profile_name")
+            or default_profile_for_test_type(getattr(case, "test_type", ""))
+        )
+        resolved_profile = self.profile_resolver.resolve_for_test_type(
+            requested_profile_name,
+            getattr(case, "test_type", ""),
+        )
+        ctx.values["resolved_profile"] = build_consumable_measurement_profile(
+            test_type=getattr(case, "test_type", ""),
+            resolved_profile=resolved_profile,
+            instrument_snapshot=instrument_snapshot,
+            resolver=self.profile_resolver,
+        )
+        ctx.values["measurement_profile_name"] = (
+            ctx.values["resolved_profile"].get("profile_name") or requested_profile_name
+        )
+        ctx.values["measurement_profile_source"] = ctx.values["resolved_profile"].get("profile_source", "")
+        log.info(
+            "run_case measurement profile resolved | case=%s test_type=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s",
+            getattr(case, "key", ""),
+            getattr(case, "test_type", ""),
+            requested_profile_name,
+            instrument_snapshot.get("profile_name", ""),
+            dict(getattr(case, "tags", {}) or {}).get("measurement_profile_name", ""),
+            ctx.values["resolved_profile"].get("profile_name", ""),
+            ctx.values["resolved_profile"].get("profile_source", ""),
+            ctx.values["resolved_profile"].get("trace_mode", ""),
+            ctx.values["resolved_profile"].get("detector", ""),
+            ctx.values["resolved_profile"].get("span_hz", ""),
+            ctx.values["resolved_profile"].get("rbw_hz", ""),
+            ctx.values["resolved_profile"].get("vbw_hz", ""),
+            ctx.values["resolved_profile"].get("sweep_time_s", ""),
+            ctx.values["resolved_profile"].get("avg_count", ""),
+            ctx.values["resolved_profile"].get("average_enabled", ctx.values["resolved_profile"].get("average", "")),
+        )
         procedure = self.procedures.get_procedure(case.test_type)
         ctx.values["procedure_name"] = getattr(procedure, "name", case.test_type)
         return procedure.execute(ctx, inst, self.sink, result_id)

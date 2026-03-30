@@ -12,11 +12,13 @@ from application.steps_common import (
     ConfigureInstrumentStep,
     JudgeStep,
 )
+from application.measurement_profile_runtime import build_consumable_measurement_profile
 from application.measurements.keysight_obw_helper import (
     detect_keysight_xseries_analyzer,
     measure_obw_keysight,
     mock_obw_measurement,
 )
+from application.measurements.keysight_psd_helper import measure_psd_keysight
 
 log = logging.getLogger(__name__)
 
@@ -98,8 +100,187 @@ class SpectrumProcedure(BaseProcedure):
         return StepResult(step_name="PREFLIGHT", status="OK", data={"procedure": self.name, "test_type": ctx.case.test_type})
 
 
+class PsdMeasureStep:
+    name = "PSD_MEASURE"
+
+    def run(self, ctx: CaseContext, inst) -> StepResult:
+        detection = detect_keysight_xseries_analyzer(inst)
+        use_real = bool(detection.get("usable"))
+        backend = "real" if use_real else "mock"
+        reason = str(detection.get("reason") or "unknown")
+        idn = str(detection.get("idn") or "")
+        source_class = str(detection.get("source_class") or type(inst).__name__)
+        log.info(
+            "psd backend selected | case=%s backend=%s reason=%s source_class=%s idn=%s",
+            getattr(ctx.case, "key", ""),
+            backend,
+            reason,
+            source_class,
+            idn,
+        )
+
+        resolved_profile = build_consumable_measurement_profile(
+            test_type=getattr(ctx.case, "test_type", ""),
+            resolved_profile=dict(ctx.values.get("resolved_profile") or {}),
+            instrument_snapshot=dict(getattr(ctx.case, "instrument", {}) or {}),
+        )
+        ctx.values["resolved_profile"] = dict(resolved_profile)
+
+        try:
+            if use_real:
+                result = measure_psd_keysight(inst, ctx.case, profile_settings=resolved_profile)
+            else:
+                settings = dict(resolved_profile or getattr(ctx.case, "instrument", {}) or {})
+                if hasattr(inst, "configure"):
+                    inst.configure(settings)
+                trace_payload = inst.acquire_trace() if hasattr(inst, "acquire_trace") else {"trace": []}
+                trace = trace_payload.get("trace", [])
+                if isinstance(trace, str):
+                    trace = [float(token.strip()) for token in trace.split(",") if token.strip()]
+                if not trace:
+                    raise RuntimeError("No trace")
+                measured = max(float(x) for x in trace)
+                limit = -30.0
+                margin = limit - measured
+                result = {
+                    "measured_value": measured,
+                    "limit_value": limit,
+                    "margin_db": margin,
+                    "measurement_unit": "dBm/MHz",
+                    "measurement_source": "mock",
+                    "backend_reason": reason,
+                    "backend_idn": idn,
+                    "measurement_profile_name": resolved_profile.get("profile_name", ""),
+                    "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                    "trace_point_count": len(trace),
+                    "verdict": "PASS" if margin >= 0 else "FAIL",
+                }
+        except Exception as exc:
+            ctx.values["verdict"] = "ERROR"
+            ctx.values["measurement_source"] = backend
+            ctx.values["backend_reason"] = reason
+            ctx.values["error_message"] = str(exc)
+            return StepResult(
+                step_name=self.name,
+                status="ERROR",
+                message=str(exc),
+                data={
+                    "measurement_source": backend,
+                    "backend_reason": reason,
+                    "backend_idn": idn,
+                    "source_class": source_class,
+                    "measurement_profile_name": resolved_profile.get("profile_name", ""),
+                    "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                },
+            )
+
+        ctx.values["measured_value"] = result["measured_value"]
+        ctx.values["limit_value"] = result["limit_value"]
+        ctx.values["margin_db"] = result["margin_db"]
+        ctx.values["measurement_unit"] = result.get("measurement_unit", "dBm/MHz")
+        ctx.values["measurement_source"] = result.get("measurement_source", backend)
+        ctx.values["backend_reason"] = result.get("backend_reason", reason)
+        if result.get("backend_idn"):
+            ctx.values["backend_idn"] = result.get("backend_idn")
+        if result.get("error_message"):
+            ctx.values["error_message"] = result.get("error_message")
+        if result.get("scpi_trace_mode"):
+            ctx.values["scpi_trace_mode"] = result.get("scpi_trace_mode")
+        if result.get("scpi_detector"):
+            ctx.values["scpi_detector"] = result.get("scpi_detector")
+        if result.get("scpi_average_enabled") is not None:
+            ctx.values["scpi_average_enabled"] = result.get("scpi_average_enabled")
+        if result.get("scpi_avg_count") is not None:
+            ctx.values["scpi_avg_count"] = result.get("scpi_avg_count")
+        if result.get("trace_point_count") is not None:
+            ctx.values["trace_point_count"] = result.get("trace_point_count")
+        ctx.values["verdict"] = result.get("verdict", "ERROR")
+
+        return StepResult(
+            step_name=self.name,
+            status="OK",
+            data={
+                "measured_value": result["measured_value"],
+                "limit_value": result["limit_value"],
+                "margin_db": result["margin_db"],
+                "measurement_unit": result.get("measurement_unit", "dBm/MHz"),
+                "measurement_source": result.get("measurement_source", backend),
+                "backend_reason": result.get("backend_reason", reason),
+                "backend_idn": result.get("backend_idn", idn),
+                "measurement_profile_name": resolved_profile.get("profile_name", ""),
+                "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "trace_point_count": result.get("trace_point_count"),
+                "scpi_trace_mode": result.get("scpi_trace_mode", ""),
+                "scpi_detector": result.get("scpi_detector", ""),
+                "scpi_average_enabled": result.get("scpi_average_enabled"),
+                "scpi_avg_count": result.get("scpi_avg_count"),
+            },
+        )
+
+
 class PsdProcedure(SpectrumProcedure):
     name = "PSD"
+
+    def _use_real_backend(self, inst: InstrumentSession) -> bool:
+        detection = detect_keysight_xseries_analyzer(inst)
+        return bool(detection.get("usable"))
+
+    def _supports_generic_trace_flow(self, inst: InstrumentSession) -> bool:
+        return hasattr(inst, "configure") and hasattr(inst, "acquire_trace")
+
+    def precheck(self, ctx: CaseContext, inst: InstrumentSession) -> Optional[StepResult]:
+        detection = detect_keysight_xseries_analyzer(inst)
+        backend = "real" if detection.get("usable") else "mock"
+        if not detection.get("usable") and not self._supports_generic_trace_flow(inst):
+            return StepResult(
+                step_name="PREFLIGHT",
+                status="ERROR",
+                message=(
+                    f"Instrument '{type(inst).__name__}' does not support PSD generic trace flow "
+                    "(requires configure() and acquire_trace()) and is not a supported Keysight X-series analyzer."
+                ),
+                data={
+                    "procedure": self.name,
+                    "test_type": ctx.case.test_type,
+                    "measurement_source": backend,
+                    "backend_reason": detection.get("reason", "unknown"),
+                    "backend_idn": detection.get("idn", ""),
+                    "missing_capabilities": [
+                        name for name in ("configure", "acquire_trace") if not hasattr(inst, name)
+                    ],
+                },
+            )
+        return StepResult(
+            step_name="PREFLIGHT",
+            status="OK",
+            data={
+                "procedure": self.name,
+                "test_type": ctx.case.test_type,
+                "measurement_source": backend,
+                "backend_reason": detection.get("reason", "unknown"),
+                "backend_idn": detection.get("idn", ""),
+            },
+        )
+
+    def setup_steps(self, ctx: CaseContext, inst: InstrumentSession) -> List[Step]:
+        if self._use_real_backend(inst):
+            return []
+        return [ConfigureInstrumentStep()]
+
+    def acquire_steps(self, ctx: CaseContext, inst: InstrumentSession) -> List[Step]:
+        if self._use_real_backend(inst):
+            return [PsdMeasureStep()]
+        return [AcquireTraceStep()]
+
+    def compute_steps(self, ctx: CaseContext, inst: InstrumentSession) -> List[Step]:
+        if self._use_real_backend(inst):
+            return []
+        return [ComputeMetricsStep()]
+
+    def evaluate_steps(self, ctx: CaseContext, inst: InstrumentSession) -> List[Step]:
+        if self._use_real_backend(inst):
+            return []
+        return [JudgeStep()]
 
 
 class ObwMeasureStep:
@@ -117,8 +298,19 @@ class ObwMeasureStep:
             getattr(ctx.case, "key", ""), backend, reason, source_class, idn,
         )
 
+        resolved_profile = build_consumable_measurement_profile(
+            test_type=getattr(ctx.case, "test_type", ""),
+            resolved_profile=dict(ctx.values.get("resolved_profile") or {}),
+            instrument_snapshot=dict(getattr(ctx.case, "instrument", {}) or {}),
+        )
+        ctx.values["resolved_profile"] = dict(resolved_profile)
+
         try:
-            result = measure_obw_keysight(inst, ctx.case) if use_real else mock_obw_measurement(ctx.case)
+            result = (
+                measure_obw_keysight(inst, ctx.case, profile_settings=resolved_profile)
+                if use_real
+                else mock_obw_measurement(ctx.case)
+            )
         except Exception as exc:
             ctx.values["verdict"] = "ERROR"
             ctx.values["measurement_source"] = backend
@@ -158,6 +350,8 @@ class ObwMeasureStep:
                 "measurement_source": result.get("measurement_source", backend),
                 "backend_reason": result.get("backend_reason", reason),
                 "backend_idn": result.get("backend_idn", idn),
+                "measurement_profile_name": resolved_profile.get("profile_name", ""),
+                "measurement_profile_source": resolved_profile.get("profile_source", ""),
             },
         )
 

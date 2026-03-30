@@ -1,15 +1,13 @@
 {
-  "name": "KC_WLAN_24G_PRESET",
+  "name": "KC_WLAN_5G_OB",
   "ruleset_id": "KC_WLAN",
   "ruleset_version": "2026.02",
   "selection": {
-    "band": "2.4G",
+    "band": "5G",
     "plan_mode": "Quick",
+    "measurement_profile_name": "kc_wlan",
     "test_types": [
-      "PSD",
-      "OBW",
-      "SP",
-      "RX"
+      "OBW"
     ],
     "execution_policy": {
       "type": "CHANNEL_CENTRIC",
@@ -21,30 +19,11 @@
       ],
       "include_bw_in_group": true
     },
-    "instrument_profile_by_test": {
-      "PSD": "PSD_DEFAULT",
-      "OBW": "OBW_DEFAULT",
-      "SP": "SP_DEFAULT",
-      "RX": "RX_DEFAULT"
-    },
+    "instrument_profile_by_test": {},
     "device_class": "",
     "defaults": {},
     "wlan_expansion": {
       "mode_plan": [
-        {
-          "standard": "802.11b",
-          "phy_mode": "DSSS",
-          "bandwidths_mhz": [
-            20
-          ]
-        },
-        {
-          "standard": "802.11g",
-          "phy_mode": "OFDM",
-          "bandwidths_mhz": [
-            20
-          ]
-        },
         {
           "standard": "802.11n",
           "phy_mode": "HT",
@@ -54,11 +33,21 @@
           ]
         },
         {
+          "standard": "802.11ac",
+          "phy_mode": "VHT",
+          "bandwidths_mhz": [
+            20,
+            40,
+            80
+          ]
+        },
+        {
           "standard": "802.11ax",
           "phy_mode": "HE",
           "bandwidths_mhz": [
             20,
-            40
+            40,
+            80
           ]
         }
       ],
@@ -66,25 +55,46 @@
         {
           "bandwidth_mhz": 20,
           "channels": [
-            1,
-            6,
-            11
+            36,
+            52,
+            100,
+            149
           ],
           "frequencies_mhz": [
-            2412.0,
-            2437.0,
-            2462.0
+            5180.0,
+            5260.0,
+            5500.0,
+            5745.0
           ]
         },
         {
           "bandwidth_mhz": 40,
           "channels": [
-            3,
-            11
+            38,
+            54,
+            102,
+            151
           ],
           "frequencies_mhz": [
-            2422.0,
-            2462.0
+            5190.0,
+            5270.0,
+            5510.0,
+            5755.0
+          ]
+        },
+        {
+          "bandwidth_mhz": 80,
+          "channels": [
+            42,
+            58,
+            106,
+            155
+          ],
+          "frequencies_mhz": [
+            5210.0,
+            5290.0,
+            5530.0,
+            5775.0
           ]
         }
       ]
