@@ -6,6 +6,11 @@
   "bands": {
     "2.4G": {
       "psd_result_unit": "MW_PER_MHZ",
+      "psd": {
+        "method": "MARKER_PEAK",
+        "limit_value": 10.0,
+        "limit_unit": "MW_PER_MHZ"
+      },
       "standards": [
         "802.11b",
         "802.11g",
@@ -47,6 +52,11 @@
     },
     "5G": {
       "psd_result_unit": "MW_PER_MHZ",
+      "psd": {
+        "method": "MARKER_PEAK",
+        "limit_value": 10.0,
+        "limit_unit": "MW_PER_MHZ"
+      },
       "standards": [
         "802.11a",
         "802.11n",
@@ -129,6 +139,11 @@
     },
     "6G": {
       "psd_result_unit": "DBM_PER_MHZ",
+      "psd": {
+        "method": "MARKER_PEAK",
+        "limit_value": 1,
+        "limit_unit": "DBM_PER_MHZ"
+      },
       "standards": [
         "802.11ax",
         "802.11be"

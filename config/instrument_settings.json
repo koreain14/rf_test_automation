@@ -2,6 +2,8 @@
   "instrument": {
     "mode": "AUTO",
     "resource_name": "",
-    "timeout_ms": 10000
+    "timeout_ms": 10000,
+    "screenshot_settle_ms": 300,
+    "screenshot_root_dir": ""
   }
 }

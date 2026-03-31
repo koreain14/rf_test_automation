@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 from typing import Dict, List, Optional
 
+from application.analyzer_screenshot import capture_analyzer_screenshot_best_effort
 from application.test_type_symbols import normalize_test_type_symbol
 from domain.steps import CaseContext, InstrumentSession, Step, StepResult
 from application.steps_common import (
@@ -19,9 +20,40 @@ from application.measurements.keysight_obw_helper import (
     mock_obw_measurement,
 )
 from application.measurements.keysight_psd_helper import measure_psd_keysight
-from application.psd_unit_policy import PSD_CANONICAL_UNIT, build_psd_display_payload, normalize_psd_result_unit
+from application.psd_unit_policy import (
+    PSD_CANONICAL_UNIT,
+    PSD_METHOD_AVERAGE,
+    PSD_METHOD_MARKER_PEAK,
+    build_psd_display_payload,
+    convert_psd_value,
+    normalize_psd_method,
+    normalize_psd_result_unit,
+    psd_scpi_power_unit,
+)
 
 log = logging.getLogger(__name__)
+
+
+def _apply_screenshot_to_context(ctx: CaseContext, screenshot: dict) -> None:
+    if not screenshot:
+        return
+    for key in (
+        "screenshot_capture_status",
+        "screenshot_capture_error",
+        "screenshot_path",
+        "screenshot_abs_path",
+        "screenshot_root_dir",
+        "screenshot_requested_root_dir",
+        "screenshot_storage_mode",
+        "screenshot_fallback_used",
+        "screenshot_strategy",
+        "screenshot_backend_idn",
+        "screenshot_file_name",
+        "screenshot_size_bytes",
+    ):
+        if key in screenshot:
+            ctx.values[key] = screenshot.get(key)
+    ctx.values["screenshot_capture_done"] = True
 
 
 class BaseProcedure:
@@ -45,6 +77,29 @@ class BaseProcedure:
         return [JudgeStep()]
 
     def teardown(self, ctx: CaseContext, inst: InstrumentSession) -> Optional[StepResult]:
+        if ctx.values.get("screenshot_capture_done"):
+            return None
+        screenshot = capture_analyzer_screenshot_best_effort(
+            inst,
+            run_id=str(ctx.values.get("run_id", "") or ""),
+            result_id=str(ctx.values.get("result_id", "") or ""),
+            case=ctx.case,
+            requested_root_dir=str(ctx.values.get("screenshot_root_dir", "") or ""),
+            settle_ms=ctx.values.get("screenshot_settle_ms", 300),
+        )
+        _apply_screenshot_to_context(ctx, screenshot)
+        status = "OK" if screenshot.get("screenshot_capture_status") == "captured" else "INFO"
+        return StepResult(
+            step_name="SCREENSHOT",
+            status=status,
+            artifact_uri=screenshot.get("screenshot_abs_path") or None,
+            data=screenshot,
+            message=screenshot.get("screenshot_capture_error", ""),
+        )
+
+    @staticmethod
+    def _apply_screenshot_to_context(ctx: CaseContext, screenshot: dict) -> None:
+        _apply_screenshot_to_context(ctx, screenshot)
         return None
 
     def _run_phase(self, *, phase_name: str, ctx: CaseContext, inst: InstrumentSession, steps: List[Step], sink, result_id: str) -> Optional[StepResult]:
@@ -113,6 +168,32 @@ class PsdMeasureStep:
     def _display_unit_label(unit: str) -> str:
         return "mW/MHz" if normalize_psd_result_unit(unit) == "MW_PER_MHZ" else "dBm/MHz"
 
+    @staticmethod
+    def _method_from_case(case) -> str:
+        tags = dict(getattr(case, "tags", {}) or {})
+        return normalize_psd_method(tags.get("psd_method")) or PSD_METHOD_MARKER_PEAK
+
+    @staticmethod
+    def _limit_from_case(case, display_unit: str) -> tuple[float, float, str]:
+        tags = dict(getattr(case, "tags", {}) or {})
+        raw_limit = tags.get("psd_limit_value")
+        limit_unit = normalize_psd_result_unit(tags.get("psd_limit_unit")) or display_unit
+        try:
+            ruleset_limit_value = float(raw_limit)
+        except Exception:
+            ruleset_limit_value = convert_psd_value(-30.0, from_unit=PSD_CANONICAL_UNIT, to_unit=limit_unit)
+        canonical_limit = convert_psd_value(
+            ruleset_limit_value,
+            from_unit=limit_unit,
+            to_unit=PSD_CANONICAL_UNIT,
+        )
+        stored_limit_value = convert_psd_value(
+            canonical_limit,
+            from_unit=PSD_CANONICAL_UNIT,
+            to_unit=display_unit,
+        )
+        return stored_limit_value, canonical_limit, limit_unit
+
     def run(self, ctx: CaseContext, inst) -> StepResult:
         detection = detect_keysight_xseries_analyzer(inst)
         use_real = bool(detection.get("usable"))
@@ -138,7 +219,17 @@ class PsdMeasureStep:
 
         try:
             if use_real:
-                result = measure_psd_keysight(inst, ctx.case, profile_settings=resolved_profile)
+                result = measure_psd_keysight(
+                    inst,
+                    ctx.case,
+                    profile_settings=resolved_profile,
+                    screenshot_context={
+                        "run_id": ctx.values.get("run_id", ""),
+                        "result_id": ctx.values.get("result_id", ""),
+                        "screenshot_root_dir": ctx.values.get("screenshot_root_dir", ""),
+                        "screenshot_settle_ms": ctx.values.get("screenshot_settle_ms", 300),
+                    },
+                )
             else:
                 settings = dict(resolved_profile or getattr(ctx.case, "instrument", {}) or {})
                 if hasattr(inst, "configure"):
@@ -149,34 +240,55 @@ class PsdMeasureStep:
                     trace = [float(token.strip()) for token in trace.split(",") if token.strip()]
                 if not trace:
                     raise RuntimeError("No trace")
-                measured = max(float(x) for x in trace)
-                limit = -30.0
-                margin = limit - measured
                 display_unit = self._display_unit_from_case(ctx.case)
+                psd_method = self._method_from_case(ctx.case)
+                if psd_method == PSD_METHOD_AVERAGE:
+                    measured = sum(float(x) for x in trace) / float(len(trace))
+                else:
+                    measured = max(float(x) for x in trace)
+                limit_value, canonical_limit, limit_unit = self._limit_from_case(ctx.case, display_unit)
+                canonical_measured = convert_psd_value(
+                    measured,
+                    from_unit=display_unit,
+                    to_unit=PSD_CANONICAL_UNIT,
+                )
+                margin = canonical_limit - canonical_measured
                 display_payload = build_psd_display_payload(
-                    canonical_value_dbm_per_mhz=measured,
+                    canonical_value_dbm_per_mhz=canonical_measured,
                     display_unit=display_unit,
                 )
                 display_limit_payload = build_psd_display_payload(
-                    canonical_value_dbm_per_mhz=limit,
+                    canonical_value_dbm_per_mhz=canonical_limit,
                     display_unit=display_unit,
                 )
                 result = {
                     "measured_value": measured,
-                    "limit_value": limit,
+                    "limit_value": limit_value,
                     "margin_db": margin,
-                    "measurement_unit": "dBm/MHz",
+                    "measurement_unit": self._display_unit_label(display_unit),
                     "canonical_measurement_unit": self._display_unit_label(PSD_CANONICAL_UNIT),
+                    "canonical_measured_value": canonical_measured,
+                    "canonical_limit_value": canonical_limit,
                     "psd_result_unit": display_payload["display_unit"],
                     "psd_canonical_unit": display_payload["canonical_unit"],
+                    "psd_method": psd_method,
+                    "psd_limit_value": float((getattr(ctx.case, "tags", {}) or {}).get("psd_limit_value") or limit_value),
+                    "psd_limit_unit": limit_unit,
+                    "psd_limit_label": self._display_unit_label(limit_unit),
+                    "psd_unit_policy_source": str((getattr(ctx.case, "tags", {}) or {}).get("psd_unit_policy_source", "")),
                     "display_measured_value": display_payload["display_value"],
                     "display_limit_value": display_limit_payload["display_value"],
                     "display_measurement_unit": self._display_unit_label(display_payload["display_unit"]),
+                    "scpi_power_unit": psd_scpi_power_unit(display_unit),
+                    "scpi_measurement_method": psd_method,
+                    "ruleset_id": str((getattr(ctx.case, "tags", {}) or {}).get("ruleset_id", "")),
+                    "device_class": str((getattr(ctx.case, "tags", {}) or {}).get("device_class", "")),
                     "measurement_source": "mock",
                     "backend_reason": reason,
                     "backend_idn": idn,
                     "measurement_profile_name": resolved_profile.get("profile_name", ""),
                     "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                    "measurement_profile_span_source": "profile_or_generic_mock",
                     "trace_point_count": len(trace),
                     "verdict": "PASS" if margin >= 0 else "FAIL",
                 }
@@ -209,6 +321,8 @@ class PsdMeasureStep:
             ctx.values["backend_idn"] = result.get("backend_idn")
         if result.get("error_message"):
             ctx.values["error_message"] = result.get("error_message")
+        if result.get("measurement_profile_span_source"):
+            ctx.values["measurement_profile_span_source"] = result.get("measurement_profile_span_source")
         if result.get("scpi_trace_mode"):
             ctx.values["scpi_trace_mode"] = result.get("scpi_trace_mode")
         if result.get("scpi_detector"):
@@ -217,6 +331,16 @@ class PsdMeasureStep:
             ctx.values["scpi_average_enabled"] = result.get("scpi_average_enabled")
         if result.get("scpi_avg_count") is not None:
             ctx.values["scpi_avg_count"] = result.get("scpi_avg_count")
+        if result.get("scpi_power_unit"):
+            ctx.values["scpi_power_unit"] = result.get("scpi_power_unit")
+        if result.get("psd_method"):
+            ctx.values["psd_method"] = result.get("psd_method")
+        if result.get("psd_limit_value") is not None:
+            ctx.values["psd_limit_value"] = result.get("psd_limit_value")
+        if result.get("psd_limit_unit"):
+            ctx.values["psd_limit_unit"] = result.get("psd_limit_unit")
+        if result.get("psd_limit_label"):
+            ctx.values["psd_limit_label"] = result.get("psd_limit_label")
         if result.get("trace_point_count") is not None:
             ctx.values["trace_point_count"] = result.get("trace_point_count")
         if result.get("display_measured_value") is not None:
@@ -229,11 +353,19 @@ class PsdMeasureStep:
             ctx.values["psd_result_unit"] = result.get("psd_result_unit")
         if result.get("psd_canonical_unit"):
             ctx.values["psd_canonical_unit"] = result.get("psd_canonical_unit")
+        if result.get("psd_unit_policy_source"):
+            ctx.values["psd_unit_policy_source"] = result.get("psd_unit_policy_source")
+        if result.get("canonical_measured_value") is not None:
+            ctx.values["canonical_measured_value"] = result.get("canonical_measured_value")
+        if result.get("canonical_limit_value") is not None:
+            ctx.values["canonical_limit_value"] = result.get("canonical_limit_value")
+        _apply_screenshot_to_context(ctx, result)
         ctx.values["verdict"] = result.get("verdict", "ERROR")
 
         return StepResult(
             step_name=self.name,
             status="OK",
+            artifact_uri=result.get("screenshot_abs_path") or None,
             data={
                 "measured_value": result["measured_value"],
                 "limit_value": result["limit_value"],
@@ -244,17 +376,36 @@ class PsdMeasureStep:
                 "backend_idn": result.get("backend_idn", idn),
                 "measurement_profile_name": resolved_profile.get("profile_name", ""),
                 "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "measurement_profile_span_source": result.get("measurement_profile_span_source", ""),
                 "canonical_measurement_unit": result.get("canonical_measurement_unit", "dBm/MHz"),
+                "canonical_measured_value": result.get("canonical_measured_value"),
+                "canonical_limit_value": result.get("canonical_limit_value"),
                 "psd_result_unit": result.get("psd_result_unit", ""),
                 "psd_canonical_unit": result.get("psd_canonical_unit", PSD_CANONICAL_UNIT),
+                "psd_method": result.get("psd_method", ""),
+                "psd_limit_value": result.get("psd_limit_value"),
+                "psd_limit_unit": result.get("psd_limit_unit", ""),
+                "psd_limit_label": result.get("psd_limit_label", ""),
+                "psd_unit_policy_source": result.get("psd_unit_policy_source", ""),
                 "display_measured_value": result.get("display_measured_value"),
                 "display_limit_value": result.get("display_limit_value"),
                 "display_measurement_unit": result.get("display_measurement_unit", "dBm/MHz"),
+                "scpi_power_unit": result.get("scpi_power_unit", ""),
+                "scpi_measurement_method": result.get("scpi_measurement_method", ""),
+                "ruleset_id": result.get("ruleset_id", ""),
+                "device_class": result.get("device_class", ""),
                 "trace_point_count": result.get("trace_point_count"),
                 "scpi_trace_mode": result.get("scpi_trace_mode", ""),
                 "scpi_detector": result.get("scpi_detector", ""),
                 "scpi_average_enabled": result.get("scpi_average_enabled"),
                 "scpi_avg_count": result.get("scpi_avg_count"),
+                "screenshot_capture_status": result.get("screenshot_capture_status", ""),
+                "screenshot_capture_error": result.get("screenshot_capture_error", ""),
+                "screenshot_path": result.get("screenshot_path", ""),
+                "screenshot_abs_path": result.get("screenshot_abs_path", ""),
+                "screenshot_root_dir": result.get("screenshot_root_dir", ""),
+                "screenshot_storage_mode": result.get("screenshot_storage_mode", ""),
+                "screenshot_fallback_used": result.get("screenshot_fallback_used", False),
             },
         )
 
@@ -348,7 +499,17 @@ class ObwMeasureStep:
 
         try:
             result = (
-                measure_obw_keysight(inst, ctx.case, profile_settings=resolved_profile)
+                measure_obw_keysight(
+                    inst,
+                    ctx.case,
+                    profile_settings=resolved_profile,
+                    screenshot_context={
+                        "run_id": ctx.values.get("run_id", ""),
+                        "result_id": ctx.values.get("result_id", ""),
+                        "screenshot_root_dir": ctx.values.get("screenshot_root_dir", ""),
+                        "screenshot_settle_ms": ctx.values.get("screenshot_settle_ms", 300),
+                    },
+                )
                 if use_real
                 else mock_obw_measurement(ctx.case)
             )
@@ -379,10 +540,12 @@ class ObwMeasureStep:
             ctx.values["backend_idn"] = result.get("backend_idn")
         if result.get("error_message"):
             ctx.values["error_message"] = result.get("error_message")
+        _apply_screenshot_to_context(ctx, result)
 
         return StepResult(
             step_name=self.name,
             status="OK",
+            artifact_uri=result.get("screenshot_abs_path") or None,
             data={
                 "measured_value": result["measured_value"],
                 "limit_value": result["limit_value"],
@@ -393,6 +556,13 @@ class ObwMeasureStep:
                 "backend_idn": result.get("backend_idn", idn),
                 "measurement_profile_name": resolved_profile.get("profile_name", ""),
                 "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "screenshot_capture_status": result.get("screenshot_capture_status", ""),
+                "screenshot_capture_error": result.get("screenshot_capture_error", ""),
+                "screenshot_path": result.get("screenshot_path", ""),
+                "screenshot_abs_path": result.get("screenshot_abs_path", ""),
+                "screenshot_root_dir": result.get("screenshot_root_dir", ""),
+                "screenshot_storage_mode": result.get("screenshot_storage_mode", ""),
+                "screenshot_fallback_used": result.get("screenshot_fallback_used", False),
             },
         )
 

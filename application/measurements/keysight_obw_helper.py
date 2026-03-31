@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any, Dict, Iterator, Tuple
 
+from application.analyzer_screenshot import capture_analyzer_screenshot_best_effort
 from application.measurement_profile_runtime import build_consumable_measurement_profile
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ DEFAULT_MAX_WAIT_S = 60.0
 DEFAULT_FETCH_POLL_TIMEOUT_MS = 500
 DEFAULT_MODE_SETTLE_S = 0.05
 DEFAULT_POST_CONFIG_SETTLE_S = 0.02
+DEFAULT_POST_INIT_SETTLE_S = 0.3
 
 
 def _iter_timeout_targets(obj: Any) -> Iterator[Any]:
@@ -604,7 +606,6 @@ def _fetch_obw_hz(inst: Any) -> float:
     responses: list[str] = []
     for stage, cmd in (
         ("result_fetch", ":FETC:OBW?"),
-        ("result_legacy", ":CALC:MARK:FUNC:POW:RES? OBW"),
     ):
         try:
             log.info("keysight obw SCPI query | stage=%s cmd=%s", stage, cmd)
@@ -656,8 +657,15 @@ def _poll_obw_result_hz(
     )
 
 
-def _acquire_obw_hz(inst: Any, *, max_wait_s: float, fetch_poll_timeout_ms: int) -> float:
+def _acquire_obw_hz(
+    inst: Any,
+    *,
+    max_wait_s: float,
+    fetch_poll_timeout_ms: int,
+    post_init_settle_s: float = DEFAULT_POST_INIT_SETTLE_S,
+) -> float:
     _write_stage(inst, "init", ":INIT:IMM")
+    _sync_stage(inst, "post_init", fallback_sleep_s=post_init_settle_s)
     return _poll_obw_result_hz(
         inst,
         max_wait_s=max_wait_s,
@@ -672,6 +680,7 @@ def measure_obw_keysight(
     timeout_ms: int = 5000,
     retries: int = 1,
     profile_settings: Dict[str, Any] | None = None,
+    screenshot_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     detection = detect_keysight_xseries_analyzer(source)
     if not detection.get("usable"):
@@ -693,18 +702,24 @@ def measure_obw_keysight(
         "post_config_settle_s",
         DEFAULT_POST_CONFIG_SETTLE_S,
     )
+    post_init_settle_s = _settle_seconds_from_cfg(
+        instrument_cfg,
+        "post_init_settle_s",
+        DEFAULT_POST_INIT_SETTLE_S,
+    )
 
     last_exc = None
     last_stage = "startup"
     for attempt in range(1, retries + 1):
         try:
             log.info(
-                "keysight obw measurement start | attempt=%s/%s timeout_ms=%s max_wait_s=%s fetch_poll_timeout_ms=%s cf_mhz=%s span_mhz=%s rbw_auto=%s rbw_mhz=%s vbw_auto=%s vbw_mhz=%s sweep_auto=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s detector=%s avg_count=%s trace_mode=%s profile_name=%s profile_source=%s channel=%s case=%s target_class=%s",
+                "keysight obw measurement start | attempt=%s/%s timeout_ms=%s max_wait_s=%s fetch_poll_timeout_ms=%s post_init_settle_s=%s cf_mhz=%s span_mhz=%s rbw_auto=%s rbw_mhz=%s vbw_auto=%s vbw_mhz=%s sweep_auto=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s detector=%s avg_count=%s trace_mode=%s profile_name=%s profile_source=%s channel=%s case=%s target_class=%s",
                 attempt,
                 retries,
                 timeout_ms,
                 max_wait_s,
                 fetch_poll_timeout_ms,
+                post_init_settle_s,
                 _hz_to_mhz(cfg.center_freq_hz),
                 _hz_to_mhz(cfg.span_hz),
                 cfg.rbw_auto,
@@ -738,12 +753,21 @@ def measure_obw_keysight(
                     inst,
                     max_wait_s=max_wait_s,
                     fetch_poll_timeout_ms=fetch_poll_timeout_ms,
+                    post_init_settle_s=post_init_settle_s,
                 )
 
             measured_mhz = round(measured_hz / 1e6, 6)
             limit = bw_mhz
             margin = round(limit - measured_mhz, 6)
             verdict = "PASS" if margin >= 0 else "FAIL"
+            screenshot = capture_analyzer_screenshot_best_effort(
+                source,
+                run_id=str((screenshot_context or {}).get("run_id", "") or ""),
+                result_id=str((screenshot_context or {}).get("result_id", "") or ""),
+                case=case,
+                requested_root_dir=str((screenshot_context or {}).get("screenshot_root_dir", "") or ""),
+                settle_ms=(screenshot_context or {}).get("screenshot_settle_ms", 300),
+            )
             return {
                 "measured_value": measured_mhz,
                 "limit_value": limit,
@@ -765,6 +789,7 @@ def measure_obw_keysight(
                 "scpi_vbw_auto": bool(cfg.vbw_auto),
                 "scpi_sweep_auto": bool(cfg.sweep_auto),
                 "verdict": verdict,
+                **screenshot,
             }
         except Exception as exc:
             last_exc = exc

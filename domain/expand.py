@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
-from application.psd_unit_policy import PSD_CANONICAL_UNIT, resolve_psd_result_unit
+from application.psd_unit_policy import PSD_CANONICAL_UNIT, resolve_psd_runtime_policy
 from application.test_type_symbols import (
     DEFAULT_TEST_ORDER,
     default_profile_for_test_type,
@@ -166,12 +166,15 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     ip_map = normalize_test_type_map(sel.get("instrument_profile_by_test") or {})
     effective_profile_map: Dict[str, str] = {}
     selector_fallback_tests: List[str] = []
-    psd_result_unit = resolve_psd_result_unit(
+    device_class = str(sel.get("device_class", "")).strip()
+    psd_policy = resolve_psd_runtime_policy(
         preset_unit=sel.get("psd_result_unit"),
         band=band,
+        device_class=device_class,
         ruleset=ruleset,
         ruleset_id=ruleset.id,
     )
+    psd_unit_policy_source = "preset_override" if str(sel.get("psd_result_unit", "")).strip() else "ruleset_default"
     for t in test_types:
         prof_name = _resolve_profile_name_for_test_type(ip_map, shared_profile_name, t)
         effective_profile_map[t] = prof_name
@@ -191,12 +194,20 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     meta = {
         **runtime_meta,
         "preset_name": preset.name,
+        "ruleset_id": ruleset.id,
         "wlan_expansion": wlan,
         "measurement_profile_name": shared_profile_name,
         "measurement_profile_by_test": dict(ip_map),
         "effective_measurement_profile_by_test": dict(effective_profile_map),
-        "psd_result_unit": psd_result_unit,
+        "device_class": device_class,
+        "psd_result_unit": psd_policy["result_unit"],
         "psd_canonical_unit": PSD_CANONICAL_UNIT,
+        "psd_method": psd_policy["method"],
+        "psd_limit_value": psd_policy["limit_value"],
+        "psd_limit_unit": psd_policy["limit_unit"],
+        "psd_limit_label": psd_policy["limit_label"],
+        "psd_canonical_limit_value": psd_policy["canonical_limit_value"],
+        "psd_unit_policy_source": psd_unit_policy_source,
     }
     pol = dict(sel.get("execution_policy") or {})
     if pol:
@@ -216,20 +227,28 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             if normalize_profile_name(profile_name) and normalize_profile_name(profile_name) != shared_profile_name
         )
         log.info(
-            "build_recipe measurement profile selection | preset=%s shared_profile=%s per_test=%s effective=%s selector_fallback_tests=%s conflicts=%s",
+            "build_recipe measurement profile selection | preset=%s shared_profile=%s per_test=%s effective=%s selector_fallback_tests=%s conflicts=%s psd_method=%s psd_unit=%s psd_limit=%s %s",
             preset.name,
             shared_profile_name,
             dict(ip_map),
             dict(effective_profile_map),
             selector_fallback_tests,
             conflicts,
+            psd_policy["method"],
+            psd_policy["result_unit"],
+            psd_policy["limit_value"],
+            psd_policy["limit_label"],
         )
     else:
         log.info(
-            "build_recipe measurement profile selection | preset=%s shared_profile=(empty) per_test=%s effective=%s",
+            "build_recipe measurement profile selection | preset=%s shared_profile=(empty) per_test=%s effective=%s psd_method=%s psd_unit=%s psd_limit=%s %s",
             preset.name,
             dict(ip_map),
             dict(effective_profile_map),
+            psd_policy["method"],
+            psd_policy["result_unit"],
+            psd_policy["limit_value"],
+            psd_policy["limit_label"],
         )
 
     return Recipe(
@@ -304,8 +323,16 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                                 "group": find_group(ch),
                                 "phy_mode": phy_mode,
                                 "measurement_profile_name": ip.name,
+                                "ruleset_id": recipe.meta.get("ruleset_id", ""),
+                                "device_class": recipe.meta.get("device_class", ""),
                                 "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
                                 "psd_canonical_unit": recipe.meta.get("psd_canonical_unit", ""),
+                                "psd_method": recipe.meta.get("psd_method", ""),
+                                "psd_limit_value": recipe.meta.get("psd_limit_value"),
+                                "psd_limit_unit": recipe.meta.get("psd_limit_unit", ""),
+                                "psd_limit_label": recipe.meta.get("psd_limit_label", ""),
+                                "psd_canonical_limit_value": recipe.meta.get("psd_canonical_limit_value"),
+                                "psd_unit_policy_source": recipe.meta.get("psd_unit_policy_source", ""),
                             },
                             key=key,
                         )
@@ -368,8 +395,16 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                         "preset": recipe.meta.get("preset_name", ""),
                         "group": find_group(ch),
                         "measurement_profile_name": ip.name,
+                        "ruleset_id": recipe.meta.get("ruleset_id", ""),
+                        "device_class": recipe.meta.get("device_class", ""),
                         "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
                         "psd_canonical_unit": recipe.meta.get("psd_canonical_unit", ""),
+                        "psd_method": recipe.meta.get("psd_method", ""),
+                        "psd_limit_value": recipe.meta.get("psd_limit_value"),
+                        "psd_limit_unit": recipe.meta.get("psd_limit_unit", ""),
+                        "psd_limit_label": recipe.meta.get("psd_limit_label", ""),
+                        "psd_canonical_limit_value": recipe.meta.get("psd_canonical_limit_value"),
+                        "psd_unit_policy_source": recipe.meta.get("psd_unit_policy_source", ""),
                     },
                     key=key,
                 )

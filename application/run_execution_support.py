@@ -596,7 +596,7 @@ class CaseExecutionPipeline:
             case=case,
             ruleset=ruleset,
         )
-        values = runner.run_case(result_id, case, inst)
+        values = runner.run_case(run_id, result_id, case, inst)
         verdict = self.metadata_recorder.update_final_result(result_id=result_id, values=values)
         return result_id, verdict
 

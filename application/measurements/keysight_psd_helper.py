@@ -5,12 +5,21 @@ import logging
 import time
 from typing import Any, Dict, Iterator
 
+from application.analyzer_screenshot import capture_analyzer_screenshot_best_effort
 from application.measurement_profile_runtime import build_consumable_measurement_profile
 from application.measurements.keysight_obw_helper import detect_keysight_xseries_analyzer
 from application.psd_unit_policy import (
     PSD_CANONICAL_UNIT,
+    PSD_DEFAULT_LIMIT_CANONICAL,
+    PSD_DEFAULT_SPAN_MULTIPLIER,
+    PSD_METHOD_AVERAGE,
+    PSD_METHOD_MARKER_PEAK,
     build_psd_display_payload,
+    convert_psd_value,
+    normalize_psd_method,
     normalize_psd_result_unit,
+    psd_scpi_power_unit,
+    psd_unit_label,
 )
 
 
@@ -45,10 +54,7 @@ DEFAULT_POST_INIT_SETTLE_S = 0.05
 
 
 def _psd_unit_label(unit: str) -> str:
-    normalized = normalize_psd_result_unit(unit) or PSD_CANONICAL_UNIT
-    if normalized == "MW_PER_MHZ":
-        return "mW/MHz"
-    return "dBm/MHz"
+    return psd_unit_label(unit)
 
 
 def _iter_timeout_targets(obj: Any) -> Iterator[Any]:
@@ -289,8 +295,15 @@ def _log_psd_apply_readback(inst: Any) -> None:
             ":AVER:COUN?",
         ),
     )
+    unit_cmd, unit_response = _best_effort_query_candidates(
+        inst,
+        stage="unit_readback",
+        commands=(
+            ":UNIT:POW?",
+        ),
+    )
     log.info(
-        "keysight psd apply readback | trace_cmd=%s trace_response=%s detector_cmd=%s detector_response=%s average_cmd=%s average_response=%s avg_count_cmd=%s avg_count_response=%s",
+        "keysight psd apply readback | trace_cmd=%s trace_response=%s detector_cmd=%s detector_response=%s average_cmd=%s average_response=%s avg_count_cmd=%s avg_count_response=%s unit_cmd=%s unit_response=%s",
         trace_cmd,
         trace_response,
         detector_cmd,
@@ -299,6 +312,8 @@ def _log_psd_apply_readback(inst: Any) -> None:
         average_response,
         avg_count_cmd,
         avg_count_response,
+        unit_cmd,
+        unit_response,
     )
 
 
@@ -310,12 +325,24 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
         resolved_profile=dict(profile_settings or {}),
         instrument_snapshot=dict(getattr(case, "instrument", {}) or {}),
     )
-    span_hz = _resolve_hz(
-        instrument_cfg,
-        hz_key="span_hz",
-        mhz_key="span_mhz",
-        default_hz=max(bw_mhz * 4.0e6, DEFAULT_SPAN_HZ_MIN),
-    )
+    measurement_field_sources = dict(instrument_cfg.get("measurement_field_sources") or {})
+    resolved_profile_span_source = str(
+        measurement_field_sources.get("span_hz")
+        or measurement_field_sources.get("span_mhz")
+        or ""
+    ).strip()
+    default_span_hz = max(bw_mhz * PSD_DEFAULT_SPAN_MULTIPLIER * 1.0e6, DEFAULT_SPAN_HZ_MIN)
+    if resolved_profile_span_source == "profile_override":
+        span_hz = _resolve_hz(
+            instrument_cfg,
+            hz_key="span_hz",
+            mhz_key="span_mhz",
+            default_hz=default_span_hz,
+        )
+        applied_span_source = "profile_override"
+    else:
+        span_hz = float(default_span_hz)
+        applied_span_source = "computed_default"
     rbw_hz = _resolve_hz(
         instrument_cfg,
         hz_key="rbw_hz",
@@ -336,9 +363,14 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
         instrument_cfg.get("average_enabled", instrument_cfg.get("average")),
         _as_int(instrument_cfg.get("avg_count"), DEFAULT_AVG_COUNT) > 1,
     )
+    instrument_cfg = dict(instrument_cfg)
+    instrument_cfg["resolved_profile_span_source"] = resolved_profile_span_source or "none"
+    instrument_cfg["resolved_span_source"] = applied_span_source
+    instrument_cfg["resolved_span_hz"] = span_hz
+    instrument_cfg["resolved_default_span_hz"] = default_span_hz
 
     log.info(
-        "keysight psd profile normalization | case=%s test_type=%s profile_name=%s profile_source=%s raw_trace_mode=%s normalized_trace_mode=%s raw_detector=%s normalized_detector=%s average_enabled=%s avg_count=%s span_hz=%s rbw_hz=%s vbw_hz=%s",
+        "keysight psd profile normalization | case=%s test_type=%s profile_name=%s profile_source=%s raw_trace_mode=%s normalized_trace_mode=%s raw_detector=%s normalized_detector=%s average_enabled=%s avg_count=%s profile_span_source=%s applied_span_source=%s bw_mhz=%s span_hz=%s default_span_hz=%s rbw_hz=%s vbw_hz=%s",
         getattr(case, "key", ""),
         getattr(case, "test_type", ""),
         instrument_cfg.get("profile_name", ""),
@@ -349,7 +381,11 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
         normalized_detector,
         average_enabled,
         _as_int(instrument_cfg.get("avg_count"), DEFAULT_AVG_COUNT),
+        instrument_cfg["resolved_profile_span_source"],
+        applied_span_source,
+        bw_mhz,
         span_hz,
+        default_span_hz,
         rbw_hz,
         vbw_hz,
     )
@@ -380,16 +416,61 @@ def _resolve_display_unit(case: Any) -> str:
     return normalize_psd_result_unit(tags.get("psd_result_unit")) or PSD_CANONICAL_UNIT
 
 
+def _resolve_policy_context(case: Any) -> Dict[str, Any]:
+    tags = dict(getattr(case, "tags", {}) or {})
+    display_unit = _resolve_display_unit(case)
+    limit_value_raw = tags.get("psd_limit_value")
+    limit_unit = normalize_psd_result_unit(tags.get("psd_limit_unit")) or display_unit
+    try:
+        limit_value = float(limit_value_raw) if limit_value_raw not in (None, "") else convert_psd_value(
+            PSD_DEFAULT_LIMIT_CANONICAL,
+            from_unit=PSD_CANONICAL_UNIT,
+            to_unit=limit_unit,
+        )
+    except Exception:
+        limit_value = convert_psd_value(
+            PSD_DEFAULT_LIMIT_CANONICAL,
+            from_unit=PSD_CANONICAL_UNIT,
+            to_unit=limit_unit,
+        )
+    canonical_limit_value = tags.get("psd_canonical_limit_value")
+    try:
+        canonical_limit = (
+            float(canonical_limit_value)
+            if canonical_limit_value not in (None, "")
+            else convert_psd_value(limit_value, from_unit=limit_unit, to_unit=PSD_CANONICAL_UNIT)
+        )
+    except Exception:
+        canonical_limit = convert_psd_value(limit_value, from_unit=limit_unit, to_unit=PSD_CANONICAL_UNIT)
+    return {
+        "ruleset_id": str(tags.get("ruleset_id", "") or ""),
+        "band": str(getattr(case, "band", "") or tags.get("band", "") or ""),
+        "device_class": str(tags.get("device_class", "") or ""),
+        "measurement_profile_name": str(tags.get("measurement_profile_name", "") or ""),
+        "display_unit": display_unit,
+        "display_unit_label": _psd_unit_label(display_unit),
+        "scpi_power_unit": psd_scpi_power_unit(display_unit),
+        "method": normalize_psd_method(tags.get("psd_method")) or PSD_METHOD_MARKER_PEAK,
+        "policy_source": str(tags.get("psd_unit_policy_source", "") or ""),
+        "ruleset_limit_value": float(limit_value),
+        "ruleset_limit_unit": limit_unit,
+        "ruleset_limit_label": _psd_unit_label(limit_unit),
+        "canonical_limit_value": float(canonical_limit),
+    }
+
+
 def _configure_psd_measurement(
     inst: Any,
     cfg: KeysightPsdConfig,
     *,
+    scpi_power_unit: str = "DBM",
     mode_settle_s: float = DEFAULT_MODE_SETTLE_S,
     post_config_settle_s: float = DEFAULT_POST_CONFIG_SETTLE_S,
 ) -> None:
     commands = [
         ("prepare", "*CLS"),
-        ("prepare", ":INIT:CONT ON"),
+        # Use single-shot acquisition so marker read does not restart averaging unexpectedly.
+        ("prepare", ":INIT:CONT OFF"),
         ("prepare", ":ABOR"),
         ("prepare", ":CONF:SAN"),
         ("frequency", f":FREQ:CENT {_format_scpi_value(cfg.center_freq_hz)}"),
@@ -398,16 +479,17 @@ def _configure_psd_measurement(
         ("vbw", f":BAND:VID {_format_scpi_value(cfg.vbw_hz)}"),
         ("sweep", f":SWE:TIME {_format_scpi_value(cfg.sweep_time_s)}"),
         ("atten", f":POW:ATT {_format_scpi_value(cfg.atten_db)}"),
+        ("unit", f":UNIT:POW {scpi_power_unit}"),
         ("display", f":DISP:WIND:TRAC:Y:RLEV {_format_scpi_value(cfg.ref_level_dbm)}"),
         ("average", f":AVER {_format_scpi_bool(cfg.average_enabled)}"),
         ("trace", f":TRAC1:MODE {cfg.trace_mode}"),
         ("detector", f":DET {cfg.detector}"),
     ]
     if cfg.average_enabled:
-        commands.insert(11, ("average_count", f":AVER:COUN {_as_int(cfg.avg_count, DEFAULT_AVG_COUNT)}"))
+        commands.insert(12, ("average_count", f":AVER:COUN {_as_int(cfg.avg_count, DEFAULT_AVG_COUNT)}"))
 
     log.info(
-        "keysight psd configure apply | trace_mode=%s detector=%s average_enabled=%s avg_count=%s center_freq_hz=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s mode_settle_s=%s post_config_settle_s=%s",
+        "keysight psd configure apply | trace_mode=%s detector=%s average_enabled=%s avg_count=%s center_freq_hz=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s scpi_power_unit=%s mode_settle_s=%s post_config_settle_s=%s",
         cfg.trace_mode,
         cfg.detector,
         cfg.average_enabled,
@@ -419,6 +501,7 @@ def _configure_psd_measurement(
         cfg.sweep_time_s,
         cfg.atten_db,
         cfg.ref_level_dbm,
+        scpi_power_unit,
         mode_settle_s,
         post_config_settle_s,
     )
@@ -465,14 +548,89 @@ def _fetch_trace(inst: Any) -> list[float]:
     raise RuntimeError(f"unable to read PSD trace from analyzer | responses={responses}")
 
 
-def _acquire_trace_points(
+def _trigger_single_sweep(
     inst: Any,
     *,
     post_init_settle_s: float = DEFAULT_POST_INIT_SETTLE_S,
-) -> list[float]:
+) -> None:
+    log.info("keysight psd acquisition trigger | mode=single_sweep cmd=:INIT:IMM")
     _write_stage(inst, "init", ":INIT:IMM")
     _sync_stage(inst, "post_init", fallback_sleep_s=post_init_settle_s)
-    return _fetch_trace(inst)
+
+
+def _acquire_marker_peak_value(
+    inst: Any,
+    *,
+    post_init_settle_s: float = DEFAULT_POST_INIT_SETTLE_S,
+) -> Dict[str, Any]:
+    _trigger_single_sweep(inst, post_init_settle_s=post_init_settle_s)
+    try:
+        _write_stage(inst, "marker_on", ":CALC:MARK1:STAT ON")
+    except Exception as exc:
+        log.info("keysight psd marker enable write skipped | err=%s", exc)
+    try:
+        # Marker operations are applied after the single sweep completes so averaging state is preserved.
+        _write_stage(inst, "marker_mode", ":CALC:MARK1:MODE POS")
+    except Exception as exc:
+        log.info("keysight psd marker mode write skipped | err=%s", exc)
+    try:
+        _write_stage(inst, "marker_max", ":CALC:MARK1:MAX")
+        marker_cmd, marker_response = _best_effort_query_candidates(
+            inst,
+            stage="marker_y_readback",
+            commands=(
+                ":CALC:MARK1:Y?",
+                ":CALC:MARK:Y?",
+            ),
+        )
+        if marker_cmd and marker_response not in (None, ""):
+            value = float(marker_response.split(",")[0].strip())
+            return {
+                "measured_value": value,
+                "trace_point_count": 0,
+                "read_path": "marker_y",
+                "read_command": marker_cmd,
+            }
+    except Exception as exc:
+        log.info("keysight psd marker read failed -> fallback trace max | err=%s", exc)
+    trace_points = _fetch_trace(inst)
+    return {
+        "measured_value": max(trace_points),
+        "trace_point_count": len(trace_points),
+        "read_path": "trace_max_fallback",
+        "read_command": ":TRAC? TRACE1",
+    }
+
+
+def _acquire_average_value(
+    inst: Any,
+    *,
+    post_init_settle_s: float = DEFAULT_POST_INIT_SETTLE_S,
+) -> Dict[str, Any]:
+    _trigger_single_sweep(inst, post_init_settle_s=post_init_settle_s)
+    trace_points = _fetch_trace(inst)
+    if not trace_points:
+        raise RuntimeError("unable to compute PSD average from empty trace")
+    return {
+        "measured_value": sum(trace_points) / float(len(trace_points)),
+        "trace_point_count": len(trace_points),
+        "read_path": "trace_average",
+        "read_command": ":TRAC? TRACE1",
+    }
+
+
+def _measure_psd_value_by_method(
+    inst: Any,
+    *,
+    method: str,
+    post_init_settle_s: float,
+) -> Dict[str, Any]:
+    normalized_method = normalize_psd_method(method) or PSD_METHOD_MARKER_PEAK
+    if normalized_method == PSD_METHOD_MARKER_PEAK:
+        return _acquire_marker_peak_value(inst, post_init_settle_s=post_init_settle_s)
+    if normalized_method == PSD_METHOD_AVERAGE:
+        return _acquire_average_value(inst, post_init_settle_s=post_init_settle_s)
+    raise ValueError(f"unsupported PSD measurement method: {normalized_method}")
 
 
 def measure_psd_keysight(
@@ -481,6 +639,7 @@ def measure_psd_keysight(
     *,
     timeout_ms: int = 5000,
     profile_settings: Dict[str, Any] | None = None,
+    screenshot_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     detection = detect_keysight_xseries_analyzer(source)
     if not detection.get("usable"):
@@ -488,7 +647,7 @@ def measure_psd_keysight(
 
     inst = detection["target"]
     cfg, instrument_cfg = _build_runtime_config(case, profile_settings=profile_settings)
-    limit = -30.0
+    policy_ctx = _resolve_policy_context(case)
     mode_settle_s = _settle_seconds_from_cfg(instrument_cfg, "mode_settle_s", DEFAULT_MODE_SETTLE_S)
     post_config_settle_s = _settle_seconds_from_cfg(
         instrument_cfg,
@@ -502,10 +661,24 @@ def measure_psd_keysight(
     )
 
     log.info(
-        "keysight psd measurement start | timeout_ms=%s cf_mhz=%s span_mhz=%s rbw_hz=%s vbw_hz=%s detector=%s trace_mode=%s average_enabled=%s avg_count=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s profile_name=%s profile_source=%s display_unit=%s canonical_unit=%s channel=%s case=%s target_class=%s",
+        "keysight psd measurement start | timeout_ms=%s ruleset_id=%s band=%s device_class=%s profile_name=%s profile_source=%s policy_source=%s psd_method=%s scpi_power_unit=%s display_unit=%s limit_value=%s limit_unit=%s canonical_limit=%s canonical_unit=%s cf_mhz=%s span_mhz=%s span_source=%s rbw_hz=%s vbw_hz=%s detector=%s trace_mode=%s average_enabled=%s avg_count=%s sweep_time_s=%s atten_db=%s ref_level_dbm=%s channel=%s case=%s target_class=%s",
         timeout_ms,
+        policy_ctx["ruleset_id"],
+        policy_ctx["band"],
+        policy_ctx["device_class"],
+        instrument_cfg.get("profile_name", ""),
+        instrument_cfg.get("profile_source", ""),
+        policy_ctx["policy_source"],
+        policy_ctx["method"],
+        policy_ctx["scpi_power_unit"],
+        policy_ctx["display_unit"],
+        policy_ctx["ruleset_limit_value"],
+        policy_ctx["ruleset_limit_unit"],
+        policy_ctx["canonical_limit_value"],
+        PSD_CANONICAL_UNIT,
         _hz_to_mhz(cfg.center_freq_hz),
         _hz_to_mhz(cfg.span_hz),
+        instrument_cfg.get("resolved_span_source", ""),
         cfg.rbw_hz,
         cfg.vbw_hz,
         cfg.detector,
@@ -515,10 +688,6 @@ def measure_psd_keysight(
         cfg.sweep_time_s,
         cfg.atten_db,
         cfg.ref_level_dbm,
-        instrument_cfg.get("profile_name", ""),
-        instrument_cfg.get("profile_source", ""),
-        _resolve_display_unit(case),
-        PSD_CANONICAL_UNIT,
         getattr(case, "channel", ""),
         getattr(case, "key", ""),
         type(inst).__name__,
@@ -528,28 +697,56 @@ def measure_psd_keysight(
         _configure_psd_measurement(
             inst,
             cfg,
+            scpi_power_unit=policy_ctx["scpi_power_unit"],
             mode_settle_s=mode_settle_s,
             post_config_settle_s=post_config_settle_s,
         )
-        trace_points = _acquire_trace_points(inst, post_init_settle_s=post_init_settle_s)
+        acquisition = _measure_psd_value_by_method(
+            inst,
+            method=policy_ctx["method"],
+            post_init_settle_s=post_init_settle_s,
+        )
 
-    measured = max(trace_points)
-    margin = round(limit - measured, 6)
+    measured = float(acquisition["measured_value"])
+    canonical_measured = convert_psd_value(
+        measured,
+        from_unit=policy_ctx["display_unit"],
+        to_unit=PSD_CANONICAL_UNIT,
+    )
+    stored_limit_value = convert_psd_value(
+        policy_ctx["canonical_limit_value"],
+        from_unit=PSD_CANONICAL_UNIT,
+        to_unit=policy_ctx["display_unit"],
+    )
+    margin = round(policy_ctx["canonical_limit_value"] - canonical_measured, 6)
     verdict = "PASS" if margin >= 0 else "FAIL"
     display_payload = build_psd_display_payload(
-        canonical_value_dbm_per_mhz=measured,
-        display_unit=_resolve_display_unit(case),
+        canonical_value_dbm_per_mhz=canonical_measured,
+        display_unit=policy_ctx["display_unit"],
     )
     display_limit_payload = build_psd_display_payload(
-        canonical_value_dbm_per_mhz=limit,
+        canonical_value_dbm_per_mhz=policy_ctx["canonical_limit_value"],
         display_unit=display_payload["display_unit"],
     )
+    screenshot = capture_analyzer_screenshot_best_effort(
+        source,
+        run_id=str((screenshot_context or {}).get("run_id", "") or ""),
+        result_id=str((screenshot_context or {}).get("result_id", "") or ""),
+        case=case,
+        requested_root_dir=str((screenshot_context or {}).get("screenshot_root_dir", "") or ""),
+        settle_ms=(screenshot_context or {}).get("screenshot_settle_ms", 300),
+    )
     log.info(
-        "keysight psd result canonicalized | case=%s channel=%s measured_dbm_per_mhz=%s limit_dbm_per_mhz=%s margin_db=%s display_value=%s display_limit=%s display_unit=%s canonical_unit=%s",
+        "keysight psd result canonicalized | case=%s channel=%s method=%s read_path=%s raw_value=%s raw_unit=%s measured_dbm_per_mhz=%s limit_dbm_per_mhz=%s stored_limit_value=%s margin_db=%s display_value=%s display_limit=%s display_unit=%s canonical_unit=%s",
         getattr(case, "key", ""),
         getattr(case, "channel", ""),
+        policy_ctx["method"],
+        acquisition.get("read_path", ""),
         measured,
-        limit,
+        policy_ctx["display_unit_label"],
+        canonical_measured,
+        policy_ctx["canonical_limit_value"],
+        stored_limit_value,
         margin,
         display_payload["display_value"],
         display_limit_payload["display_value"],
@@ -558,28 +755,45 @@ def measure_psd_keysight(
     )
     return {
         "measured_value": measured,
-        "limit_value": limit,
+        "limit_value": stored_limit_value,
         "margin_db": margin,
-        "measurement_unit": "dBm/MHz",
+        "measurement_unit": policy_ctx["display_unit_label"],
         "canonical_measurement_unit": _psd_unit_label(PSD_CANONICAL_UNIT),
+        "canonical_measured_value": canonical_measured,
+        "canonical_limit_value": policy_ctx["canonical_limit_value"],
         "psd_result_unit": display_payload["display_unit"],
         "psd_canonical_unit": display_payload["canonical_unit"],
+        "psd_method": policy_ctx["method"],
+        "psd_limit_value": policy_ctx["ruleset_limit_value"],
+        "psd_limit_unit": policy_ctx["ruleset_limit_unit"],
+        "psd_limit_label": policy_ctx["ruleset_limit_label"],
+        "psd_unit_policy_source": policy_ctx["policy_source"],
         "display_measured_value": display_payload["display_value"],
         "display_limit_value": display_limit_payload["display_value"],
-        "display_measurement_unit": _psd_unit_label(display_payload["display_unit"]),
+        "display_measurement_unit": policy_ctx["display_unit_label"],
         "measurement_source": "keysight_xseries_scpi",
         "backend_reason": detection.get("reason", "idn_match"),
         "backend_idn": detection.get("idn", ""),
         "measurement_profile_name": instrument_cfg.get("profile_name", ""),
         "measurement_profile_source": instrument_cfg.get("profile_source", ""),
         "measurement_profile_test_type": instrument_cfg.get("test_type", ""),
+        "measurement_profile_span_source": instrument_cfg.get("resolved_span_source", ""),
+        "measurement_profile_resolved_span_source": instrument_cfg.get("resolved_profile_span_source", ""),
+        "measurement_profile_default_span_hz": instrument_cfg.get("resolved_default_span_hz"),
         "scpi_trace_mode": cfg.trace_mode,
         "scpi_detector": cfg.detector,
         "scpi_average_enabled": bool(cfg.average_enabled),
         "scpi_avg_count": int(cfg.avg_count),
+        "scpi_power_unit": policy_ctx["scpi_power_unit"],
         "scpi_span_hz": float(cfg.span_hz),
         "scpi_rbw_hz": float(cfg.rbw_hz),
         "scpi_vbw_hz": float(cfg.vbw_hz),
-        "trace_point_count": len(trace_points),
+        "scpi_measurement_method": policy_ctx["method"],
+        "scpi_read_path": acquisition.get("read_path", ""),
+        "scpi_read_command": acquisition.get("read_command", ""),
+        "ruleset_id": policy_ctx["ruleset_id"],
+        "device_class": policy_ctx["device_class"],
+        "trace_point_count": acquisition.get("trace_point_count", 0),
         "verdict": verdict,
+        **screenshot,
     }

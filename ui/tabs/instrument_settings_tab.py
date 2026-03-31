@@ -51,9 +51,19 @@ class InstrumentSettingsTab(QWidget):
         self.timeout_spin.setSingleStep(1000)
         self.timeout_spin.setSuffix(" ms")
 
+        self.screenshot_settle_spin = QSpinBox()
+        self.screenshot_settle_spin.setRange(0, 10000)
+        self.screenshot_settle_spin.setSingleStep(50)
+        self.screenshot_settle_spin.setSuffix(" ms")
+
+        self.screenshot_root_edit = QLineEdit()
+        self.screenshot_root_edit.setPlaceholderText("Optional custom screenshot root directory")
+
         form.addRow("Mode", self.mode_combo)
         form.addRow("Resource", self.resource_edit)
         form.addRow("Timeout", self.timeout_spin)
+        form.addRow("Screenshot Settle", self.screenshot_settle_spin)
+        form.addRow("Screenshot Root", self.screenshot_root_edit)
 
         layout.addWidget(box)
 
@@ -92,6 +102,8 @@ class InstrumentSettingsTab(QWidget):
             "mode": self.mode_combo.currentText().upper(),
             "resource_name": self.resource_edit.text().strip(),
             "timeout_ms": int(self.timeout_spin.value()),
+            "screenshot_settle_ms": int(self.screenshot_settle_spin.value()),
+            "screenshot_root_dir": self.screenshot_root_edit.text().strip(),
         }
 
     def set_settings(self, settings: Dict) -> None:
@@ -100,6 +112,8 @@ class InstrumentSettingsTab(QWidget):
         self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.resource_edit.setText(str(settings.get("resource_name", "")))
         self.timeout_spin.setValue(int(settings.get("timeout_ms", 10000)))
+        self.screenshot_settle_spin.setValue(int(settings.get("screenshot_settle_ms", 300)))
+        self.screenshot_root_edit.setText(str(settings.get("screenshot_root_dir", "")))
         self._sync_enabled_state()
 
     def _build_factory(self):

@@ -43,14 +43,26 @@ class MeasurementProfileLoader:
         return self._resolve_document(name=name, docs=docs, stack=[])
 
     def resolve_measurement(self, profile_name: str, test_type: str) -> dict[str, Any]:
-        resolved = self.resolve_profile(profile_name)
+        docs = self.load_profile_map()
+        name = normalize_profile_name(profile_name)
+        if not name:
+            raise ValueError("profile_name is required")
+        normalized_test_type = normalize_test_type_symbol(test_type)
+        if not normalized_test_type:
+            raise ValueError("test_type is required")
+
+        resolved = self._resolve_document(name=name, docs=docs, stack=[])
         common = dict(resolved.get("common") or {})
         measurements = dict(resolved.get("measurements") or {})
-        normalized_test_type = normalize_test_type_symbol(test_type)
         test_overrides = dict(measurements.get(normalized_test_type) or {})
         merged = self._deep_merge(common, test_overrides)
         merged["profile_name"] = str(resolved.get("name") or normalize_profile_name(profile_name))
         merged["test_type"] = normalized_test_type
+        merged["measurement_field_sources"] = self._resolve_measurement_field_sources(
+            docs=docs,
+            requested_profile_name=name,
+            test_type=normalized_test_type,
+        )
         return merged
 
     def save_profile(self, document: MeasurementProfileDocument, path: str | Path | None = None) -> Path:
@@ -99,6 +111,58 @@ class MeasurementProfileLoader:
         merged = self._deep_merge(base_payload, current_payload)
         merged["name"] = doc.name
         return merged
+
+    def _resolve_measurement_field_sources(
+        self,
+        *,
+        docs: dict[str, MeasurementProfileDocument],
+        requested_profile_name: str,
+        test_type: str,
+    ) -> dict[str, str]:
+        sources: dict[str, str] = {}
+        chain = self._profile_chain(docs=docs, requested_profile_name=requested_profile_name)
+        requested_normalized = normalize_profile_name(requested_profile_name)
+
+        for doc_name in chain:
+            doc = docs.get(doc_name)
+            if doc is None:
+                continue
+            source_kind = "profile_override" if doc_name == requested_normalized and doc_name != "default" else "inherited_default"
+            common = dict(doc.common or {})
+            measurement = dict((doc.measurements or {}).get(test_type) or {})
+            for key in common.keys():
+                sources[str(key)] = source_kind
+            for key in measurement.keys():
+                sources[str(key)] = source_kind
+
+        return sources
+
+    def _profile_chain(
+        self,
+        *,
+        docs: dict[str, MeasurementProfileDocument],
+        requested_profile_name: str,
+    ) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+
+        def _visit(name: str) -> None:
+            normalized_name = normalize_profile_name(name)
+            if not normalized_name or normalized_name in seen:
+                return
+            seen.add(normalized_name)
+            doc = docs.get(normalized_name)
+            if doc is None:
+                return
+            base_name = normalize_profile_name(doc.base)
+            if not base_name and normalized_name != "default" and "default" in docs:
+                base_name = "default"
+            if base_name:
+                _visit(base_name)
+            out.append(normalized_name)
+
+        _visit(requested_profile_name)
+        return out
 
     def _load_document(self, path: Path) -> MeasurementProfileDocument:
         with path.open("r", encoding="utf-8") as fp:

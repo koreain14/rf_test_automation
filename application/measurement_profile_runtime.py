@@ -122,6 +122,11 @@ def build_consumable_measurement_profile(
     merged = _deep_merge(compat_base, requested_base)
     merged = _deep_merge(merged, dict(resolved_profile or {}))
     merged = _deep_merge(merged, dict(instrument_snapshot or {}))
+    measurement_field_sources = dict(merged.get("measurement_field_sources") or {})
+    if dict(instrument_snapshot or {}).get("span_hz") not in (None, ""):
+        measurement_field_sources["span_hz"] = "profile_override"
+    if dict(instrument_snapshot or {}).get("span_mhz") not in (None, ""):
+        measurement_field_sources["span_mhz"] = "profile_override"
 
     if merged.get("detector") not in (None, ""):
         merged["detector"] = _normalize_detector(merged.get("detector"))
@@ -165,5 +170,7 @@ def build_consumable_measurement_profile(
         merged["profile_name"] = compat_profile_name
     if normalized_test_type and merged.get("test_type") in (None, ""):
         merged["test_type"] = normalized_test_type
+    if measurement_field_sources:
+        merged["measurement_field_sources"] = measurement_field_sources
 
     return merged

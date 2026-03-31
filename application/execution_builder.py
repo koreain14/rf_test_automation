@@ -40,6 +40,13 @@ class ExecutionBuilder:
             metadata={
                 "group": str((case.get("tags") or {}).get("group", "")),
                 "test_key": str(case.get("key", "")),
+                "measurement_profile_name": str((case.get("tags") or {}).get("measurement_profile_name", "")),
+                "psd_result_unit": str((case.get("tags") or {}).get("psd_result_unit", "")),
+                "psd_method": str((case.get("tags") or {}).get("psd_method", "")),
+                "psd_limit_value": (case.get("tags") or {}).get("psd_limit_value"),
+                "psd_limit_unit": str((case.get("tags") or {}).get("psd_limit_unit", "")),
+                "psd_unit_policy_source": str((case.get("tags") or {}).get("psd_unit_policy_source", "")),
+                "device_class": str((case.get("tags") or {}).get("device_class", "")),
             },
         )
         return [step]

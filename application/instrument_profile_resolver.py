@@ -82,6 +82,11 @@ class InstrumentProfileResolver:
         if test_type:
             resolved["test_type"] = test_type
         resolved["profile_source"] = "compat_defaults"
+        resolved["measurement_field_sources"] = {
+            str(k): "inherited_default"
+            for k in resolved.keys()
+            if str(k) not in {"profile_name", "test_type", "profile_source", "measurement_field_sources"}
+        }
         return resolved
 
     def resolve_for_analyzer(self, profile_name: str | None, analyzer_model: str | None) -> Dict[str, Any]:
@@ -120,6 +125,11 @@ class InstrumentProfileResolver:
         resolved["profile_name"] = compat_name
         resolved["test_type"] = normalized_test_type
         resolved["profile_source"] = "compat_defaults"
+        resolved["measurement_field_sources"] = {
+            str(k): "inherited_default"
+            for k in resolved.keys()
+            if str(k) not in {"profile_name", "test_type", "profile_source", "requested_profile_name", "measurement_field_sources"}
+        }
         if compat_name != name:
             resolved["requested_profile_name"] = name
         return resolved
@@ -200,6 +210,7 @@ class InstrumentProfileResolver:
             "test_type",
             "requested_profile_name",
             "profile_source",
+            "measurement_field_sources",
         }
         return {str(k): v for k, v in dict(resolved or {}).items() if str(k) in allowed}
 

@@ -9,6 +9,8 @@ DEFAULT_INSTRUMENT_SETTINGS: Dict[str, Any] = {
     "mode": "AUTO",          # AUTO / DUMMY / SCPI
     "resource_name": "",
     "timeout_ms": 10000,
+    "screenshot_root_dir": "",
+    "screenshot_settle_ms": 300,
 }
 
 

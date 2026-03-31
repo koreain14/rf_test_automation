@@ -6,11 +6,10 @@
     "band": "5G",
     "plan_mode": "Quick",
     "measurement_profile_name": "kc_wlan",
+    "psd_result_unit": "MW_PER_MHZ",
     "test_types": [
       "PSD",
-      "OBW",
-      "SP",
-      "RX"
+      "OBW"
     ],
     "execution_policy": {
       "type": "CHANNEL_CENTRIC",

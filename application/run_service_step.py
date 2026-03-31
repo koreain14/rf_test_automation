@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from threading import RLock
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from application.execution_builder import ExecutionBuilder
@@ -13,6 +14,7 @@ from application.run_execution_support import (
     RunMetadataRecorder,
     RunSessionCoordinator,
 )
+from application.settings_store import SettingsStore
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
 
 
@@ -26,6 +28,7 @@ class RunServiceStep:
         self.execution_builder = ExecutionBuilder()
         self.instrument_profile_resolver = InstrumentProfileResolver()
         self.path_resolver = PathResolver()
+        self.settings_store = SettingsStore(Path("config/instrument_settings.json"))
         self.session_coordinator = RunSessionCoordinator(instrument_manager)
         self.metadata_recorder = RunMetadataRecorder(
             run_repo=run_repo,
@@ -163,6 +166,12 @@ class RunServiceStep:
                 equipment_profile_name=equipment_profile_name,
                 recipe=recipe,
             )
+            instrument_settings = self.settings_store.load_instrument_settings()
+            requested_screenshot_root = str(instrument_settings.get("screenshot_root_dir", "") or "").strip()
+            screenshot_settle_ms = int(instrument_settings.get("screenshot_settle_ms", 300) or 300)
+            environment.run_metadata["screenshot_root_dir"] = requested_screenshot_root
+            environment.run_metadata["screenshot_settle_ms"] = screenshot_settle_ms
+            environment.run_metadata["screenshot_default_root_dir"] = str((Path("artifacts") / "runs").resolve())
             with self._active_environment_lock:
                 self._active_environment = environment
             self.metadata_recorder.update_run_metadata(run_id=run_id, metadata=environment.run_metadata)

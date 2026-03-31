@@ -1,11 +1,13 @@
 # application/runner_step.py
 from __future__ import annotations
 import logging
+from pathlib import Path
 from typing import Callable, Iterable, Optional, Tuple
 
 from application.instrument_profile_resolver import InstrumentProfileResolver
 from application.measurement_profile_runtime import build_consumable_measurement_profile
 from application.procedures import ProcedureRegistry
+from application.settings_store import SettingsStore
 from application.steps_dut import DutConfigureStep
 from application.test_type_symbols import default_profile_for_test_type
 from application.test_type_symbols import normalize_profile_name
@@ -25,9 +27,15 @@ class StepRunner:
         self.procedures = procedures
         self.sink = sink  # sink.write(result_id, StepResult)
         self.profile_resolver = InstrumentProfileResolver()
+        self.settings_store = SettingsStore(Path("config/instrument_settings.json"))
 
-    def run_case(self, result_id: str, case, inst) -> dict:
+    def run_case(self, run_id: str, result_id: str, case, inst) -> dict:
         ctx = CaseContext(case=case)
+        instrument_settings = self.settings_store.load_instrument_settings()
+        ctx.values["run_id"] = str(run_id or "")
+        ctx.values["result_id"] = str(result_id or "")
+        ctx.values["screenshot_root_dir"] = str(instrument_settings.get("screenshot_root_dir", "") or "").strip()
+        ctx.values["screenshot_settle_ms"] = int(instrument_settings.get("screenshot_settle_ms", 300) or 300)
         instrument_snapshot = dict(getattr(case, "instrument", {}) or {})
         requested_profile_name = normalize_profile_name(
             instrument_snapshot.get("profile_name")
@@ -49,9 +57,12 @@ class StepRunner:
         )
         ctx.values["measurement_profile_source"] = ctx.values["resolved_profile"].get("profile_source", "")
         log.info(
-            "run_case measurement profile resolved | case=%s test_type=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s psd_result_unit=%s",
+            "run_case measurement profile resolved | case=%s test_type=%s ruleset_id=%s band=%s device_class=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s psd_method=%s psd_result_unit=%s psd_limit_value=%s psd_limit_unit=%s",
             getattr(case, "key", ""),
             getattr(case, "test_type", ""),
+            dict(getattr(case, "tags", {}) or {}).get("ruleset_id", ""),
+            getattr(case, "band", ""),
+            dict(getattr(case, "tags", {}) or {}).get("device_class", ""),
             requested_profile_name,
             instrument_snapshot.get("profile_name", ""),
             dict(getattr(case, "tags", {}) or {}).get("measurement_profile_name", ""),
@@ -65,7 +76,10 @@ class StepRunner:
             ctx.values["resolved_profile"].get("sweep_time_s", ""),
             ctx.values["resolved_profile"].get("avg_count", ""),
             ctx.values["resolved_profile"].get("average_enabled", ctx.values["resolved_profile"].get("average", "")),
+            dict(getattr(case, "tags", {}) or {}).get("psd_method", ""),
             dict(getattr(case, "tags", {}) or {}).get("psd_result_unit", ""),
+            dict(getattr(case, "tags", {}) or {}).get("psd_limit_value", ""),
+            dict(getattr(case, "tags", {}) or {}).get("psd_limit_unit", ""),
         )
         procedure = self.procedures.get_procedure(case.test_type)
         ctx.values["procedure_name"] = getattr(procedure, "name", case.test_type)
@@ -104,7 +118,7 @@ class StepRunner:
 
                 prev_key = cur_key
 
-            values = self.run_case(case, inst)
+            values = self.run_case("", "", case, inst)
             verdict = values.get("verdict", "ERROR")
 
             count += 1

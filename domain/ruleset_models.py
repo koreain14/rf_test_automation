@@ -26,7 +26,6 @@ class ChannelGroup:
         if not isinstance(reps, dict):
             raise TypeError(f"ChannelGroup '{name}'.representatives must be dict, got {type(reps)}")
 
-        # int로 정규화
         channels_int = [int(x) for x in channels]
         reps_int = {str(k): int(v) for k, v in reps.items()}
 
@@ -46,8 +45,13 @@ class BandInfo:
     standards: List[str]
     tests_supported: List[str]
     channel_groups: Dict[str, ChannelGroup]
-    device_classes: Optional[List[str]] = None  # 6G에만 존재할 수 있음
+    device_classes: Optional[List[str]] = None
     psd_result_unit: Optional[str] = None
+    psd_method: Optional[str] = None
+    psd_limit_value: Optional[float] = None
+    psd_limit_unit: Optional[str] = None
+    psd: Optional[Dict[str, Any]] = None
+    psd_by_device_class: Optional[Dict[str, Dict[str, Any]]] = None
 
     @staticmethod
     def from_dict(band: str, d: Dict[str, Any]) -> "BandInfo":
@@ -75,6 +79,28 @@ class BandInfo:
             for name, cg_dict in cg_raw.items()
         }
 
+        psd_raw = d.get("psd", {}) or {}
+        if not isinstance(psd_raw, dict):
+            raise TypeError(f"BandInfo '{band}'.psd must be dict, got {type(psd_raw)}")
+
+        psd_by_device_class_raw = d.get("psd_by_device_class", {}) or {}
+        if not isinstance(psd_by_device_class_raw, dict):
+            raise TypeError(
+                f"BandInfo '{band}'.psd_by_device_class must be dict, got {type(psd_by_device_class_raw)}"
+            )
+
+        psd_by_device_class = {
+            str(name): dict(value or {})
+            for name, value in psd_by_device_class_raw.items()
+            if isinstance(value, dict)
+        }
+
+        raw_limit_value = psd_raw.get("limit_value", d.get("psd_limit_value"))
+        try:
+            limit_value = float(raw_limit_value) if raw_limit_value not in (None, "") else None
+        except Exception:
+            limit_value = None
+
         return BandInfo(
             band=str(band),
             standards=[str(x) for x in standards],
@@ -82,6 +108,11 @@ class BandInfo:
             channel_groups=channel_groups,
             device_classes=[str(x) for x in device_classes] if device_classes is not None else None,
             psd_result_unit=str(d.get("psd_result_unit", "")).strip() or None,
+            psd_method=str(psd_raw.get("method", d.get("psd_method", ""))).strip() or None,
+            psd_limit_value=limit_value,
+            psd_limit_unit=str(psd_raw.get("limit_unit", d.get("psd_limit_unit", ""))).strip() or None,
+            psd=dict(psd_raw),
+            psd_by_device_class=psd_by_device_class,
         )
 
 
@@ -118,6 +149,7 @@ class PlanMode:
             name=str(name),
             channel_policy=str(d.get("channel_policy", "")),
         )
+
 
 @dataclass(frozen=True)
 class RuleSet:
