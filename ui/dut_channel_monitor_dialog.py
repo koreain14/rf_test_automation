@@ -49,6 +49,9 @@ class DutChannelMonitorDialog(QDialog):
         self.lbl_frequency = QLabel(self._format_mhz(self._current_value("center_freq_mhz")))
         self.lbl_bandwidth = QLabel(self._format_bw(self._current_value("bw_mhz")))
         self.lbl_mode = QLabel(str(self._current_value("phy_mode") or self.payload.get("standard") or "-"))
+        self.lbl_voltage_condition = QLabel(str(self._current_value("voltage_condition") or "-"))
+        self.lbl_target_voltage = QLabel(self._format_voltage(self._current_value("target_voltage_v")))
+        self.lbl_nominal_voltage = QLabel(self._format_voltage(self._current_value("nominal_voltage_v")))
         self.lbl_monitor_status = QLabel("Preparing monitor preview...")
         self.lbl_monitor_source = QLabel("-")
         self.lbl_monitor_span = QLabel("-")
@@ -59,6 +62,9 @@ class DutChannelMonitorDialog(QDialog):
         form.addRow("Center Frequency", self.lbl_frequency)
         form.addRow("Bandwidth", self.lbl_bandwidth)
         form.addRow("Mode", self.lbl_mode)
+        form.addRow("Voltage Condition", self.lbl_voltage_condition)
+        form.addRow("Target Voltage", self.lbl_target_voltage)
+        form.addRow("Nominal Voltage", self.lbl_nominal_voltage)
         form.addRow("Monitor Status", self.lbl_monitor_status)
         form.addRow("Analyzer Source", self.lbl_monitor_source)
         form.addRow("Preview Span", self.lbl_monitor_span)
@@ -105,5 +111,13 @@ class DutChannelMonitorDialog(QDialog):
     def _format_span(self, value) -> str:
         try:
             return f"{float(value):.3f} MHz"
+        except Exception:
+            return "-"
+
+    def _format_voltage(self, value) -> str:
+        try:
+            if value in (None, ""):
+                return "-"
+            return f"{float(value):g} V"
         except Exception:
             return "-"

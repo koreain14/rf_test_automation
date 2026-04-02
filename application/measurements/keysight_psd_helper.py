@@ -177,6 +177,70 @@ def _resolve_hz(
     return float(default_hz)
 
 
+def _resolve_span_multiplier(cfg: Dict[str, Any]) -> float | None:
+    span_mode = str(cfg.get("span_mode") or "").strip().upper()
+    if span_mode == "BW_X2":
+        return 2.0
+    if cfg.get("span_multiplier") not in (None, ""):
+        return _as_float(cfg.get("span_multiplier"), 0.0)
+    return None
+
+
+def _normalize_psd_measured_value(
+    raw_value: float,
+    *,
+    display_unit: str,
+    scpi_power_unit: str,
+) -> tuple[float, str]:
+    normalized_display_unit = normalize_psd_result_unit(display_unit) or PSD_CANONICAL_UNIT
+    normalized_scpi_power_unit = str(scpi_power_unit or "").strip().upper()
+    measured_value = float(raw_value)
+    measured_source_unit = normalized_display_unit
+    if normalized_display_unit == "MW_PER_MHZ" and normalized_scpi_power_unit == "W":
+        measured_value = float(raw_value) * 1000.0
+        measured_source_unit = "MW_PER_MHZ"
+    return measured_value, measured_source_unit
+
+
+def _resolve_psd_span_hz(
+    cfg: Dict[str, Any],
+    *,
+    bw_mhz: float,
+    measurement_field_sources: Dict[str, Any],
+) -> tuple[float, float, str, str]:
+    default_span_hz = max(bw_mhz * PSD_DEFAULT_SPAN_MULTIPLIER * 1.0e6, DEFAULT_SPAN_HZ_MIN)
+    profile_span_source = str(
+        measurement_field_sources.get("span_hz")
+        or measurement_field_sources.get("span_mhz")
+        or ""
+    ).strip()
+    if profile_span_source == "profile_override":
+        return (
+            _resolve_hz(cfg, hz_key="span_hz", mhz_key="span_mhz", default_hz=default_span_hz),
+            default_span_hz,
+            profile_span_source,
+            "profile_override",
+        )
+
+    span_multiplier = _resolve_span_multiplier(cfg)
+    if span_multiplier not in (None, 0.0):
+        span_min_hz = _as_float(cfg.get("span_min_hz"), DEFAULT_SPAN_HZ_MIN)
+        computed_span_hz = max(bw_mhz * float(span_multiplier) * 1.0e6, span_min_hz)
+        return (
+            computed_span_hz,
+            default_span_hz,
+            "profile_policy",
+            "profile_policy_bw_multiplier",
+        )
+
+    return (
+        float(default_span_hz),
+        default_span_hz,
+        profile_span_source or "none",
+        "computed_default",
+    )
+
+
 def _normalize_detector(value: Any) -> str:
     detector = str(value or "RMS").strip().upper()
     aliases = {
@@ -326,23 +390,11 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
         instrument_snapshot=dict(getattr(case, "instrument", {}) or {}),
     )
     measurement_field_sources = dict(instrument_cfg.get("measurement_field_sources") or {})
-    resolved_profile_span_source = str(
-        measurement_field_sources.get("span_hz")
-        or measurement_field_sources.get("span_mhz")
-        or ""
-    ).strip()
-    default_span_hz = max(bw_mhz * PSD_DEFAULT_SPAN_MULTIPLIER * 1.0e6, DEFAULT_SPAN_HZ_MIN)
-    if resolved_profile_span_source == "profile_override":
-        span_hz = _resolve_hz(
-            instrument_cfg,
-            hz_key="span_hz",
-            mhz_key="span_mhz",
-            default_hz=default_span_hz,
-        )
-        applied_span_source = "profile_override"
-    else:
-        span_hz = float(default_span_hz)
-        applied_span_source = "computed_default"
+    span_hz, default_span_hz, resolved_profile_span_source, applied_span_source = _resolve_psd_span_hz(
+        instrument_cfg,
+        bw_mhz=bw_mhz,
+        measurement_field_sources=measurement_field_sources,
+    )
     rbw_hz = _resolve_hz(
         instrument_cfg,
         hz_key="rbw_hz",
@@ -707,10 +759,15 @@ def measure_psd_keysight(
             post_init_settle_s=post_init_settle_s,
         )
 
-    measured = float(acquisition["measured_value"])
+    raw_measured = float(acquisition["measured_value"])
+    measured, measured_source_unit = _normalize_psd_measured_value(
+        raw_measured,
+        display_unit=policy_ctx["display_unit"],
+        scpi_power_unit=policy_ctx["scpi_power_unit"],
+    )
     canonical_measured = convert_psd_value(
         measured,
-        from_unit=policy_ctx["display_unit"],
+        from_unit=measured_source_unit,
         to_unit=PSD_CANONICAL_UNIT,
     )
     stored_limit_value = convert_psd_value(
@@ -718,6 +775,7 @@ def measure_psd_keysight(
         from_unit=PSD_CANONICAL_UNIT,
         to_unit=policy_ctx["display_unit"],
     )
+    difference_value = round(measured - stored_limit_value, 6)
     margin = round(policy_ctx["canonical_limit_value"] - canonical_measured, 6)
     verdict = "PASS" if margin >= 0 else "FAIL"
     display_payload = build_psd_display_payload(
@@ -742,8 +800,8 @@ def measure_psd_keysight(
         getattr(case, "channel", ""),
         policy_ctx["method"],
         acquisition.get("read_path", ""),
-        measured,
-        policy_ctx["display_unit_label"],
+        raw_measured,
+        f"{policy_ctx['scpi_power_unit']} -> {policy_ctx['display_unit_label']}",
         canonical_measured,
         policy_ctx["canonical_limit_value"],
         stored_limit_value,
@@ -768,9 +826,16 @@ def measure_psd_keysight(
         "psd_limit_unit": policy_ctx["ruleset_limit_unit"],
         "psd_limit_label": policy_ctx["ruleset_limit_label"],
         "psd_unit_policy_source": policy_ctx["policy_source"],
+        "difference_value": difference_value,
+        "difference_unit": policy_ctx["display_unit_label"],
+        "comparator": "upper_limit",
         "display_measured_value": display_payload["display_value"],
         "display_limit_value": display_limit_payload["display_value"],
         "display_measurement_unit": policy_ctx["display_unit_label"],
+        "raw_measured_value": raw_measured,
+        "raw_measurement_unit": policy_ctx["scpi_power_unit"],
+        "normalized_measured_value": measured,
+        "normalized_measurement_unit": policy_ctx["display_unit_label"],
         "measurement_source": "keysight_xseries_scpi",
         "backend_reason": detection.get("reason", "idn_match"),
         "backend_idn": detection.get("idn", ""),

@@ -1,9 +1,10 @@
-# infrastructure/run_repo_sqlite.py
+﻿# infrastructure/run_repo_sqlite.py
 
 import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from application.result_difference import enrich_difference_fields
 from .db import get_connection
 
 
@@ -12,6 +13,44 @@ def now() -> str:
 
 
 class RunRepositorySQLite:
+    def _load_step_payloads_by_result(self, project_id: str, result_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        if not result_ids:
+            return {}
+
+        conn = get_connection()
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in result_ids)
+        cur.execute(
+            f"""
+            SELECT result_id, artifact_uri, data_json
+            FROM step_results
+            WHERE project_id = ? AND result_id IN ({placeholders})
+            ORDER BY created_at ASC, rowid ASC
+            """,
+            [project_id, *result_ids],
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+
+        merged: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            result_id = str(row.get("result_id", "") or "")
+            if not result_id:
+                continue
+            payload = merged.setdefault(result_id, {})
+            try:
+                data = json.loads(row.get("data_json") or "{}")
+            except Exception:
+                data = {}
+            if isinstance(data, dict):
+                payload.update(data)
+            artifact_uri = str(row.get("artifact_uri", "") or "")
+            if artifact_uri:
+                payload.setdefault("artifact_uri", artifact_uri)
+                if not payload.get("screenshot_abs_path"):
+                    payload["screenshot_abs_path"] = artifact_uri
+        return merged
+
     def create_run(self, project_id: str, preset_id: str, parent_run_id: Optional[str] = None, note: str = "") -> str:
         run_id = str(uuid.uuid4())
         conn = get_connection()
@@ -150,10 +189,10 @@ class RunRepositorySQLite:
 
     def list_results(self, project_id: str, run_id: str, status: str | None = None, limit: int = 5000):
         """
-        Results 탭 표시용 결과 리스트.
-        ✅ result_id 포함 (선택한 결과의 step_results 조회용)
-        ✅ measured_value / limit_value 포함
-        ✅ reason: step_results.data_json의 최신 기록에서 추출
+        Results ???쒖떆??寃곌낵 由ъ뒪??
+        ??result_id ?ы븿 (?좏깮??寃곌낵??step_results 議고쉶??
+        ??measured_value / limit_value ?ы븿
+        ??reason: step_results.data_json??理쒖떊 湲곕줉?먯꽌 異붿텧
         """
         conn = get_connection()
         cur = conn.cursor()
@@ -198,27 +237,36 @@ class RunRepositorySQLite:
         cur.execute(base_sql, tuple(params))
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
+        merged_step_payloads = self._load_step_payloads_by_result(
+            project_id=project_id,
+            result_ids=[str(r.get('result_id', '') or '') for r in rows],
+        )
 
-        # tags_json에서 group 꺼내기(기존 유지) :contentReference[oaicite:2]{index=2}
+        # tags_json?먯꽌 group 爰쇰궡湲?湲곗〈 ?좎?) :contentReference[oaicite:2]{index=2}
         for r in rows:
+            last = dict(merged_step_payloads.get(str(r.get('result_id', '') or ''), {}) or {})
+            tags = {}
             # group
             try:
                 tags = json.loads(r.get("tags_json") or "{}")
                 r["group"] = tags.get("group", "")
             except Exception:
                 r["group"] = ""
+                tags = {}
 
-            # reason (last_step_data_json 기반)
+            # reason (last_step_data_json 湲곕컲)
             reason = ""
             try:
-                last = json.loads(r.get("last_step_data_json") or "{}")
-                # 흔히 쓰는 키들을 순서대로 탐색
+                latest = json.loads(r.get("last_step_data_json") or "{}")
+                if isinstance(latest, dict):
+                    last.update(latest)
+                # ?뷀엳 ?곕뒗 ?ㅻ뱾???쒖꽌?濡??먯깋
                 for k in ("reason", "message", "error", "exception", "detail", "desc"):
                     v = last.get(k)
                     if isinstance(v, str) and v.strip():
                         reason = v.strip()
                         break
-                # nested 형태도 최소 대응
+                # nested ?뺥깭??理쒖냼 ???
                 if not reason and isinstance(last.get("error"), dict):
                     v = last["error"].get("message") or last["error"].get("detail")
                     if isinstance(v, str):
@@ -227,6 +275,38 @@ class RunRepositorySQLite:
                 reason = ""
 
             r["reason"] = reason
+            enriched = enrich_difference_fields(r, last)
+            r["difference_value"] = enriched.get("difference_value")
+            r["difference_unit"] = enriched.get("difference_unit", "")
+            r["comparator"] = enriched.get("comparator", "")
+            r["measurement_unit"] = str(
+                last.get("display_measurement_unit")
+                or last.get("measurement_unit")
+                or r.get("difference_unit")
+                or ""
+            )
+            r["measurement_profile_name"] = str(last.get("measurement_profile_name", "") or "")
+            r["measurement_profile_source"] = str(last.get("measurement_profile_source", "") or "")
+            r["measurement_method"] = str(
+                last.get("scpi_measurement_method")
+                or last.get("psd_method")
+                or ""
+            )
+            r["screenshot_path"] = str(last.get("screenshot_path", "") or "")
+            r["screenshot_abs_path"] = str(last.get("screenshot_abs_path", "") or "")
+            r["has_screenshot"] = bool(r["screenshot_path"] or r["screenshot_abs_path"])
+            r["voltage_condition"] = str(last.get("voltage_condition") or tags.get("voltage_condition") or "")
+            r["nominal_voltage_v"] = (
+                last.get("nominal_voltage_v")
+                if last.get("nominal_voltage_v") not in (None, "")
+                else tags.get("nominal_voltage_v")
+            )
+            r["target_voltage_v"] = (
+                last.get("target_voltage_v")
+                if last.get("target_voltage_v") not in (None, "")
+                else tags.get("target_voltage_v")
+            )
+            r["last_step_data"] = last
 
         return rows
 
@@ -345,10 +425,12 @@ class RunRepositorySQLite:
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
 
-        # data_json 파싱 편의
+        # data_json ?뚯떛 ?몄쓽
         for r in rows:
             try:
                 r["data"] = json.loads(r.get("data_json") or "{}")
             except Exception:
                 r["data"] = {}
         return rows
+
+

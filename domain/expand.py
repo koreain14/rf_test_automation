@@ -12,13 +12,102 @@ from application.test_type_symbols import (
     normalize_test_type_map,
 )
 from .models import InstrumentProfile, Preset, Recipe, RuleSet, TestCase
-from .ruleset_models import BandInfo, ChannelGroup
+from .ruleset_models import BandInfo, ChannelGroup, normalize_voltage_policy
 
 log = logging.getLogger(__name__)
 
 
 def center_freq_mhz_from_channel_5g(ch: int) -> float:
     return 5000 + 5 * ch
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def _resolve_voltage_axis(recipe_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    policy = normalize_voltage_policy(recipe_meta.get("voltage_policy") or {})
+    nominal_voltage_v = _coerce_float(recipe_meta.get("nominal_voltage_v"))
+    if not bool(policy.get("enabled")):
+        return [{}]
+    if nominal_voltage_v is None or nominal_voltage_v <= 0:
+        return [{}]
+
+    levels = list(policy.get("levels") or [])
+    if not levels:
+        return [{}]
+
+    settle_time_ms = _coerce_int(policy.get("settle_time_ms"), 0)
+    axes: List[Dict[str, Any]] = []
+    for level in levels:
+        row = dict(level or {})
+        name = str(row.get("name", "")).strip().upper()
+        if not name:
+            continue
+        percent_offset = _coerce_float(row.get("percent_offset"))
+        percent_offset = 0.0 if percent_offset is None else float(percent_offset)
+        target_voltage_v = round(nominal_voltage_v * (1.0 + (percent_offset / 100.0)), 6)
+        axes.append(
+            {
+                "voltage_condition": name,
+                "voltage_condition_label": str(row.get("label", name)).strip() or name,
+                "nominal_voltage_v": nominal_voltage_v,
+                "target_voltage_v": target_voltage_v,
+                "voltage_percent_offset": percent_offset,
+                "voltage_settle_time_ms": settle_time_ms,
+            }
+        )
+    return axes or [{}]
+
+
+def _voltage_key_suffix(axis: Dict[str, Any]) -> str:
+    condition = str(axis.get("voltage_condition", "") or "").strip()
+    if not condition:
+        return ""
+    target_voltage_v = _coerce_float(axis.get("target_voltage_v"))
+    if target_voltage_v is None:
+        return f"|VCOND:{condition}"
+    return f"|VCOND:{condition}|TV:{target_voltage_v:.6f}"
+
+
+def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    tags = {
+        "plan_mode": recipe.plan_mode,
+        "preset": recipe.meta.get("preset_name", ""),
+        "group": "",
+        "measurement_profile_name": ip.name,
+        "ruleset_id": recipe.meta.get("ruleset_id", ""),
+        "device_class": recipe.meta.get("device_class", ""),
+        "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
+        "psd_canonical_unit": recipe.meta.get("psd_canonical_unit", ""),
+        "psd_method": recipe.meta.get("psd_method", ""),
+        "psd_limit_value": recipe.meta.get("psd_limit_value"),
+        "psd_limit_unit": recipe.meta.get("psd_limit_unit", ""),
+        "psd_limit_label": recipe.meta.get("psd_limit_label", ""),
+        "psd_canonical_limit_value": recipe.meta.get("psd_canonical_limit_value"),
+        "psd_unit_policy_source": recipe.meta.get("psd_unit_policy_source", ""),
+        "voltage_policy_enabled": bool(recipe.meta.get("voltage_policy_enabled")),
+        "voltage_policy_active": bool(recipe.meta.get("voltage_policy_active")),
+        "voltage_policy_status": recipe.meta.get("voltage_policy_status", ""),
+        "nominal_voltage_v": recipe.meta.get("nominal_voltage_v"),
+    }
+    if extra_tags:
+        tags.update(extra_tags)
+    return tags
 
 
 def _resolve_profile_name_for_test_type(
@@ -167,6 +256,18 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     effective_profile_map: Dict[str, str] = {}
     selector_fallback_tests: List[str] = []
     device_class = str(sel.get("device_class", "")).strip()
+    nominal_voltage_v = _coerce_float(sel.get("nominal_voltage_v"))
+    voltage_policy = normalize_voltage_policy(getattr(ruleset, "voltage_policy", {}) or {})
+    voltage_policy_enabled = bool(voltage_policy.get("enabled"))
+    voltage_levels = list(voltage_policy.get("levels") or [])
+    voltage_policy_active = bool(voltage_policy_enabled and nominal_voltage_v and nominal_voltage_v > 0 and voltage_levels)
+    voltage_policy_status = "disabled"
+    if voltage_policy_active:
+        voltage_policy_status = "enabled"
+    elif voltage_policy_enabled and not voltage_levels:
+        voltage_policy_status = "disabled_no_levels"
+    elif voltage_policy_enabled and not nominal_voltage_v:
+        voltage_policy_status = "disabled_missing_nominal"
     psd_policy = resolve_psd_runtime_policy(
         preset_unit=sel.get("psd_result_unit"),
         band=band,
@@ -184,11 +285,15 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         if ip is None:
             ip_by_test[t] = InstrumentProfile(
                 name=prof_name,
-                settings={"profile_name": prof_name},
+                settings={
+                    "profile_name": prof_name,
+                    "instrument_snapshot_source": "measurement_profile_reference",
+                },
             )
         else:
             settings = dict(ip.settings or {})
             settings.setdefault("profile_name", prof_name)
+            settings.setdefault("instrument_snapshot_source", "ruleset.instrument_profiles")
             ip_by_test[t] = InstrumentProfile(name=ip.name, settings=settings)
 
     meta = {
@@ -200,6 +305,11 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "measurement_profile_by_test": dict(ip_map),
         "effective_measurement_profile_by_test": dict(effective_profile_map),
         "device_class": device_class,
+        "voltage_policy": voltage_policy,
+        "voltage_policy_enabled": voltage_policy_enabled,
+        "voltage_policy_active": voltage_policy_active,
+        "voltage_policy_status": voltage_policy_status,
+        "nominal_voltage_v": nominal_voltage_v,
         "psd_result_unit": psd_policy["result_unit"],
         "psd_canonical_unit": PSD_CANONICAL_UNIT,
         "psd_method": psd_policy["method"],
@@ -227,7 +337,7 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             if normalize_profile_name(profile_name) and normalize_profile_name(profile_name) != shared_profile_name
         )
         log.info(
-            "build_recipe measurement profile selection | preset=%s shared_profile=%s per_test=%s effective=%s selector_fallback_tests=%s conflicts=%s psd_method=%s psd_unit=%s psd_limit=%s %s",
+            "build_recipe measurement profile selection | preset=%s shared_profile=%s per_test=%s effective=%s selector_fallback_tests=%s conflicts=%s psd_method=%s psd_unit=%s psd_limit=%s %s voltage_policy_enabled=%s voltage_policy_active=%s voltage_policy_status=%s nominal_voltage_v=%s",
             preset.name,
             shared_profile_name,
             dict(ip_map),
@@ -238,10 +348,14 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             psd_policy["result_unit"],
             psd_policy["limit_value"],
             psd_policy["limit_label"],
+            voltage_policy_enabled,
+            voltage_policy_active,
+            voltage_policy_status,
+            nominal_voltage_v,
         )
     else:
         log.info(
-            "build_recipe measurement profile selection | preset=%s shared_profile=(empty) per_test=%s effective=%s psd_method=%s psd_unit=%s psd_limit=%s %s",
+            "build_recipe measurement profile selection | preset=%s shared_profile=(empty) per_test=%s effective=%s psd_method=%s psd_unit=%s psd_limit=%s %s voltage_policy_enabled=%s voltage_policy_active=%s voltage_policy_status=%s nominal_voltage_v=%s",
             preset.name,
             dict(ip_map),
             dict(effective_profile_map),
@@ -249,6 +363,10 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             psd_policy["result_unit"],
             psd_policy["limit_value"],
             psd_policy["limit_label"],
+            voltage_policy_enabled,
+            voltage_policy_active,
+            voltage_policy_status,
+            nominal_voltage_v,
         )
 
     return Recipe(
@@ -283,6 +401,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
         return ""
 
     wlan = dict(recipe.meta.get("wlan_expansion") or {})
+    voltage_axes = _resolve_voltage_axis(dict(recipe.meta or {}))
     mode_plan = list(wlan.get("mode_plan") or [])
     channel_plan = list(wlan.get("channel_plan") or [])
     if mode_plan and channel_plan:
@@ -308,34 +427,33 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                     )
                     for test in recipe.test_types:
                         ip = recipe.instrument_profile_by_test[test]
-                        key = f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{standard}|{phy_mode}|{test}|CH{ch}|BW{bw}"
-                        yield TestCase(
-                            test_type=test,
-                            band=recipe.band,
-                            standard=standard,
-                            channel=ch,
-                            center_freq_mhz=cf,
-                            bw_mhz=bw,
-                            instrument=dict(ip.settings),
-                            tags={
-                                "plan_mode": recipe.plan_mode,
-                                "preset": recipe.meta.get("preset_name", ""),
-                                "group": find_group(ch),
-                                "phy_mode": phy_mode,
-                                "measurement_profile_name": ip.name,
-                                "ruleset_id": recipe.meta.get("ruleset_id", ""),
-                                "device_class": recipe.meta.get("device_class", ""),
-                                "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
-                                "psd_canonical_unit": recipe.meta.get("psd_canonical_unit", ""),
-                                "psd_method": recipe.meta.get("psd_method", ""),
-                                "psd_limit_value": recipe.meta.get("psd_limit_value"),
-                                "psd_limit_unit": recipe.meta.get("psd_limit_unit", ""),
-                                "psd_limit_label": recipe.meta.get("psd_limit_label", ""),
-                                "psd_canonical_limit_value": recipe.meta.get("psd_canonical_limit_value"),
-                                "psd_unit_policy_source": recipe.meta.get("psd_unit_policy_source", ""),
-                            },
-                            key=key,
-                        )
+                        for voltage_axis in voltage_axes:
+                            voltage_tags = dict(voltage_axis or {})
+                            key = (
+                                f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{standard}|{phy_mode}|"
+                                f"{test}|CH{ch}|BW{bw}{_voltage_key_suffix(voltage_tags)}"
+                            )
+                            tags = _merge_case_tags(
+                                recipe,
+                                ch,
+                                ip,
+                                {
+                                    "group": find_group(ch),
+                                    "phy_mode": phy_mode,
+                                    **voltage_tags,
+                                },
+                            )
+                            yield TestCase(
+                                test_type=test,
+                                band=recipe.band,
+                                standard=standard,
+                                channel=ch,
+                                center_freq_mhz=cf,
+                                bw_mhz=bw,
+                                instrument=dict(ip.settings),
+                                tags=tags,
+                                key=key,
+                            )
         return
 
     pol = recipe.channel_policy
@@ -381,30 +499,29 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
         for bw in recipe.bandwidth_mhz:
             for ch in channels:
                 cf = center_freq_mhz_from_channel_5g(ch) if recipe.band == "5G" else 0.0
-                key = f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{recipe.standard}|{test}|CH{ch}|BW{bw}"
-                yield TestCase(
-                    test_type=test,
-                    band=recipe.band,
-                    standard=recipe.standard,
-                    channel=ch,
-                    center_freq_mhz=cf,
-                    bw_mhz=bw,
-                    instrument=dict(ip.settings),
-                    tags={
-                        "plan_mode": recipe.plan_mode,
-                        "preset": recipe.meta.get("preset_name", ""),
-                        "group": find_group(ch),
-                        "measurement_profile_name": ip.name,
-                        "ruleset_id": recipe.meta.get("ruleset_id", ""),
-                        "device_class": recipe.meta.get("device_class", ""),
-                        "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
-                        "psd_canonical_unit": recipe.meta.get("psd_canonical_unit", ""),
-                        "psd_method": recipe.meta.get("psd_method", ""),
-                        "psd_limit_value": recipe.meta.get("psd_limit_value"),
-                        "psd_limit_unit": recipe.meta.get("psd_limit_unit", ""),
-                        "psd_limit_label": recipe.meta.get("psd_limit_label", ""),
-                        "psd_canonical_limit_value": recipe.meta.get("psd_canonical_limit_value"),
-                        "psd_unit_policy_source": recipe.meta.get("psd_unit_policy_source", ""),
-                    },
-                    key=key,
-                )
+                for voltage_axis in voltage_axes:
+                    voltage_tags = dict(voltage_axis or {})
+                    key = (
+                        f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{recipe.standard}|"
+                        f"{test}|CH{ch}|BW{bw}{_voltage_key_suffix(voltage_tags)}"
+                    )
+                    tags = _merge_case_tags(
+                        recipe,
+                        ch,
+                        ip,
+                        {
+                            "group": find_group(ch),
+                            **voltage_tags,
+                        },
+                    )
+                    yield TestCase(
+                        test_type=test,
+                        band=recipe.band,
+                        standard=recipe.standard,
+                        channel=ch,
+                        center_freq_mhz=cf,
+                        bw_mhz=bw,
+                        instrument=dict(ip.settings),
+                        tags=tags,
+                        key=key,
+                    )

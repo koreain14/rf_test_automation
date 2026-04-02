@@ -353,6 +353,54 @@ def _resolve_hz(
     return float(default_hz)
 
 
+def _resolve_span_multiplier(cfg: Dict[str, Any]) -> float | None:
+    span_mode = str(cfg.get("span_mode") or "").strip().upper()
+    if span_mode == "BW_X2":
+        return 2.0
+    if cfg.get("span_multiplier") not in (None, ""):
+        return _as_float(cfg.get("span_multiplier"), 0.0)
+    return None
+
+
+def _resolve_obw_span_hz(
+    cfg: Dict[str, Any],
+    *,
+    bw_mhz: float,
+    measurement_field_sources: Dict[str, Any],
+) -> tuple[float, float, str, str]:
+    default_span_hz = max(bw_mhz * 2.0e6, DEFAULT_SPAN_HZ_MIN)
+    profile_span_source = str(
+        measurement_field_sources.get("span_hz")
+        or measurement_field_sources.get("span_mhz")
+        or ""
+    ).strip()
+    if profile_span_source == "profile_override":
+        return (
+            _resolve_hz(cfg, hz_key="span_hz", mhz_key="span_mhz", default_hz=default_span_hz),
+            default_span_hz,
+            profile_span_source,
+            "profile_override",
+        )
+
+    span_multiplier = _resolve_span_multiplier(cfg)
+    if span_multiplier not in (None, 0.0):
+        span_min_hz = _as_float(cfg.get("span_min_hz"), DEFAULT_SPAN_HZ_MIN)
+        computed_span_hz = max(bw_mhz * float(span_multiplier) * 1.0e6, span_min_hz)
+        return (
+            computed_span_hz,
+            default_span_hz,
+            "profile_policy",
+            "profile_policy_bw_multiplier",
+        )
+
+    return (
+        float(default_span_hz),
+        default_span_hz,
+        profile_span_source or "none",
+        "computed_default",
+    )
+
+
 def _cfg_has_any(cfg: Dict[str, Any], *keys: str) -> bool:
     return any(cfg.get(key) not in (None, "") for key in keys)
 
@@ -392,12 +440,11 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
         resolved_profile=dict(profile_settings or {}),
         instrument_snapshot=dict(getattr(case, "instrument", {}) or {}),
     )
-
-    span_hz = _resolve_hz(
+    measurement_field_sources = dict(instrument_cfg.get("measurement_field_sources") or {})
+    span_hz, default_span_hz, resolved_profile_span_source, applied_span_source = _resolve_obw_span_hz(
         instrument_cfg,
-        hz_key="span_hz",
-        mhz_key="span_mhz",
-        default_hz=max(bw_mhz * 2.0e6, DEFAULT_SPAN_HZ_MIN),
+        bw_mhz=bw_mhz,
+        measurement_field_sources=measurement_field_sources,
     )
     rbw_hz = _resolve_hz(
         instrument_cfg,
@@ -420,9 +467,14 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
     raw_trace_mode = instrument_cfg.get("trace_mode", "MAXHOLD")
     normalized_detector = _normalize_detector(raw_detector)
     normalized_trace_mode = _normalize_trace_mode(raw_trace_mode)
+    instrument_cfg = dict(instrument_cfg)
+    instrument_cfg["resolved_profile_span_source"] = resolved_profile_span_source
+    instrument_cfg["resolved_span_source"] = applied_span_source
+    instrument_cfg["resolved_span_hz"] = span_hz
+    instrument_cfg["resolved_default_span_hz"] = default_span_hz
 
     log.info(
-        "keysight obw profile normalization | case=%s test_type=%s profile_name=%s profile_source=%s raw_trace_mode=%s normalized_trace_mode=%s raw_detector=%s normalized_detector=%s",
+        "keysight obw profile normalization | case=%s test_type=%s profile_name=%s profile_source=%s raw_trace_mode=%s normalized_trace_mode=%s raw_detector=%s normalized_detector=%s profile_span_source=%s applied_span_source=%s bw_mhz=%s span_hz=%s default_span_hz=%s",
         getattr(case, "key", ""),
         getattr(case, "test_type", ""),
         instrument_cfg.get("profile_name", ""),
@@ -431,6 +483,11 @@ def _build_runtime_config(case: Any, profile_settings: Dict[str, Any] | None = N
         normalized_trace_mode,
         raw_detector,
         normalized_detector,
+        resolved_profile_span_source,
+        applied_span_source,
+        bw_mhz,
+        span_hz,
+        default_span_hz,
     )
 
     return KeysightObwConfig(
@@ -758,6 +815,7 @@ def measure_obw_keysight(
 
             measured_mhz = round(measured_hz / 1e6, 6)
             limit = bw_mhz
+            difference_value = round(measured_mhz - limit, 6)
             margin = round(limit - measured_mhz, 6)
             verdict = "PASS" if margin >= 0 else "FAIL"
             screenshot = capture_analyzer_screenshot_best_effort(
@@ -779,6 +837,12 @@ def measure_obw_keysight(
                 "measurement_profile_name": instrument_cfg.get("profile_name", ""),
                 "measurement_profile_source": instrument_cfg.get("profile_source", ""),
                 "measurement_profile_test_type": instrument_cfg.get("test_type", ""),
+                "measurement_profile_span_source": instrument_cfg.get("resolved_span_source", ""),
+                "measurement_profile_resolved_span_source": instrument_cfg.get("resolved_profile_span_source", ""),
+                "measurement_profile_default_span_hz": instrument_cfg.get("resolved_default_span_hz"),
+                "difference_value": difference_value,
+                "difference_unit": "MHz",
+                "comparator": "upper_limit",
                 "scpi_timeout_ms": int(timeout_ms),
                 "scpi_max_wait_s": float(max_wait_s),
                 "scpi_fetch_poll_timeout_ms": int(fetch_poll_timeout_ms),
@@ -788,6 +852,9 @@ def measure_obw_keysight(
                 "scpi_rbw_auto": bool(cfg.rbw_auto),
                 "scpi_vbw_auto": bool(cfg.vbw_auto),
                 "scpi_sweep_auto": bool(cfg.sweep_auto),
+                "scpi_span_hz": float(cfg.span_hz),
+                "scpi_rbw_hz": float(cfg.rbw_hz),
+                "scpi_vbw_hz": float(cfg.vbw_hz),
                 "verdict": verdict,
                 **screenshot,
             }

@@ -7,14 +7,16 @@
   },
   "measurements": {
     "PSD": {
-      "span_hz": 100000000,
+      "span_mode": "BW_X2",
+      "span_min_hz": 20000000,
       "rbw_hz": 100000,
       "vbw_hz": 300000,
       "trace_mode": "AVERAGE",
       "detector": "RMS"
     },
     "OBW": {
-      "span_hz": 100000000,
+      "span_mode": "BW_X2",
+      "span_min_hz": 50000000,
       "rbw_hz": 100000,
       "vbw_hz": 300000,
       "trace_mode": "CLEAR_WRITE",

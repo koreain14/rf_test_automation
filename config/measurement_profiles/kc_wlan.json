@@ -6,21 +6,19 @@
   },
   "measurements": {
     "PSD": {
-      "trace_mode": "MAX_HOLD",
-      "vbw_hz": 1000000.0,
-      "rbw_hz": 1000000.0,
-      "avg_count": 10,
-      "att_db": 20.0,
       "ref_level_dbm": 20.0,
-      "sweep_time_s": 1.0
+      "sweep_time_s": 1.0,
+      "att_db": 20.0,
+      "trace_mode": "MAX_HOLD",
+      "avg_count": 10,
+      "vbw_hz": 1000000.0,
+      "rbw_hz": 1000000.0
     },
     "OBW": {
-      "trace_mode": "MAX_HOLD",
-      "avg_count": 50,
       "att_db": 10.0,
-      "span_hz": 160000000.0,
       "ref_level_dbm": 10.0,
-      "detector": "PEAK"
+      "trace_mode": "MAX_HOLD",
+      "avg_count": 50
     },
     "SP": {
       "span_hz": 1500000000.0

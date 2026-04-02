@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import logging
@@ -18,11 +18,13 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTableView,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from application.result_display_formatter import format_step_result_row
+from application.result_difference import format_difference, format_numeric_value
 from ui.results_table_model import ResultsTableModel
 from ui.step_log_model import StepLogModel
 from ui.workers.results_task_worker import ResultsTaskWorker
@@ -74,53 +76,51 @@ class ResultsTab(QWidget):
         row2 = QHBoxLayout()
         self.result_filter_status = QComboBox()
         self.result_filter_status.addItems(["ALL", "FAIL", "PASS", "SKIP", "ERROR"])
-
-        self.btn_fail_only = QPushButton("FAIL")
-        self.btn_error_only = QPushButton("ERROR")
-        self.btn_show_all_results = QPushButton("ALL")
-
         self.result_filter_test_type = QComboBox()
         self.result_filter_test_type.addItem("ALL")
         self.result_filter_band = QComboBox()
         self.result_filter_band.addItem("ALL")
-        self.result_filter_standard = QComboBox()
-        self.result_filter_standard.addItem("ALL")
         self.result_filter_bw = QComboBox()
         self.result_filter_bw.addItem("ALL")
         self.result_filter_channel = QComboBox()
         self.result_filter_channel.addItem("ALL")
+        self.result_filter_unit = QComboBox()
+        self.result_filter_unit.addItem("ALL")
+        self.result_filter_screenshot = QComboBox()
+        self.result_filter_screenshot.addItems(["ALL", "YES", "NO"])
+
+        self.btn_fail_only = QPushButton("FAIL")
+        self.btn_error_only = QPushButton("ERROR")
+        self.btn_show_all_results = QPushButton("ALL")
 
         row2.addWidget(QLabel("Status:"))
         row2.addWidget(self.result_filter_status)
         row2.addWidget(self.btn_show_all_results)
         row2.addWidget(self.btn_fail_only)
         row2.addWidget(self.btn_error_only)
-
         row2.addSpacing(8)
         row2.addWidget(QLabel("Test:"))
         row2.addWidget(self.result_filter_test_type)
-
         row2.addSpacing(8)
         row2.addWidget(QLabel("Band:"))
         row2.addWidget(self.result_filter_band)
-
-        row2.addSpacing(8)
-        row2.addWidget(QLabel("Std:"))
-        row2.addWidget(self.result_filter_standard)
-
         row2.addSpacing(8)
         row2.addWidget(QLabel("BW:"))
         row2.addWidget(self.result_filter_bw)
-
         row2.addSpacing(8)
         row2.addWidget(QLabel("CH:"))
         row2.addWidget(self.result_filter_channel)
-
+        row2.addSpacing(8)
+        row2.addWidget(QLabel("Unit:"))
+        row2.addWidget(self.result_filter_unit)
+        row2.addSpacing(8)
+        row2.addWidget(QLabel("Shot:"))
+        row2.addWidget(self.result_filter_screenshot)
         layout.addLayout(row2)
 
         row3 = QHBoxLayout()
         self.result_search = QLineEdit()
-        self.result_search.setPlaceholderText("Search test/band/std/ch/bw/reason/key...")
+        self.result_search.setPlaceholderText("Search test/band/ch/bw/unit/reason/key/profile...")
         self.btn_clear_result_filter = QPushButton("Clear Filter")
         self.btn_rerun_from_selection = QPushButton("Re-run from Selection")
         self.lbl_result_summary = QLabel("PASS 0 | FAIL 0 | SKIP 0 | ERROR 0")
@@ -147,6 +147,16 @@ class ResultsTab(QWidget):
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setStyleSheet("QTableView { alternate-background-color: #141b24; gridline-color: #334155; }")
 
+        detail_widget = QWidget()
+        detail_layout = QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.addWidget(QLabel("Selected Result Detail"))
+        self.result_detail = QTextEdit()
+        self.result_detail.setReadOnly(True)
+        self.result_detail.setMinimumHeight(110)
+        detail_layout.addWidget(self.result_detail)
+
+        detail_layout.addWidget(QLabel("Step Log"))
         self.steps_table = QTableView()
         self.steps_model = StepLogModel()
         self.steps_table.setModel(self.steps_model)
@@ -155,12 +165,13 @@ class ResultsTab(QWidget):
         self.steps_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.steps_table.setAlternatingRowColors(True)
         self.steps_table.setStyleSheet("QTableView { alternate-background-color: #141b24; gridline-color: #334155; }")
+        detail_layout.addWidget(self.steps_table, 1)
 
         splitter.addWidget(self.results_table)
-        splitter.addWidget(self.steps_table)
-        splitter.setSizes([700, 300])
+        splitter.addWidget(detail_widget)
+        splitter.setSizes([650, 350])
         splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)
 
         self.btn_refresh_runs.clicked.connect(self.refresh_runs)
@@ -176,9 +187,10 @@ class ResultsTab(QWidget):
         self.result_filter_status.currentIndexChanged.connect(self.load_results)
         self.result_filter_test_type.currentIndexChanged.connect(self.load_results)
         self.result_filter_band.currentIndexChanged.connect(self.load_results)
-        self.result_filter_standard.currentIndexChanged.connect(self.load_results)
         self.result_filter_bw.currentIndexChanged.connect(self.load_results)
         self.result_filter_channel.currentIndexChanged.connect(self.load_results)
+        self.result_filter_unit.currentIndexChanged.connect(self.load_results)
+        self.result_filter_screenshot.currentIndexChanged.connect(self.load_results)
         self.result_search.returnPressed.connect(self.load_results)
         self.results_table.selectionModel().selectionChanged.connect(self.on_result_selection_changed)
 
@@ -191,14 +203,16 @@ class ResultsTab(QWidget):
         self.run_combo.blockSignals(False)
         self.results_model.set_rows([])
         self.steps_model.set_rows([])
+        self.result_detail.clear()
         self.lbl_result_summary.setText("PASS 0 | FAIL 0 | SKIP 0 | ERROR 0")
         for combo in (
             self.result_filter_status,
             self.result_filter_test_type,
             self.result_filter_band,
-            self.result_filter_standard,
             self.result_filter_bw,
             self.result_filter_channel,
+            self.result_filter_unit,
+            self.result_filter_screenshot,
         ):
             combo.blockSignals(True)
             if combo.count() > 0:
@@ -264,8 +278,6 @@ class ResultsTab(QWidget):
             analyzer_name = r.get("analyzer_device_name") or ""
             run_metadata = r.get("run_metadata") or {}
             switch_path = run_metadata.get("switch_path") or ""
-            power_control = run_metadata.get("power_control") or {}
-            motion_control = run_metadata.get("motion_control") or {}
             extra = ""
             if equipment_profile:
                 extra += f" | EQ:{equipment_profile}"
@@ -273,20 +285,6 @@ class ResultsTab(QWidget):
                 extra += f" | AN:{analyzer_name}"
             if switch_path:
                 extra += f" | PATH:{switch_path}"
-            if power_control.get("enabled"):
-                psu_text = "PSU"
-                if power_control.get("output_on"):
-                    psu_text += ":ON"
-                extra += f" | {psu_text}"
-            if motion_control.get("enabled"):
-                motion_text = "MOTION"
-                angle = motion_control.get("turntable_angle_deg")
-                height = motion_control.get("mast_height_cm")
-                if angle not in (None, "", 0, 0.0):
-                    motion_text += f":AZ{angle}"
-                if height not in (None, "", 0, 0.0):
-                    motion_text += f"/H{height}"
-                extra += f" | {motion_text}"
             combo.addItem(f"{started_at} | {status} | {preset_name}{extra}", run_id)
 
         if current:
@@ -300,101 +298,111 @@ class ResultsTab(QWidget):
             "status": self.result_filter_status.currentText(),
             "test_type": self.result_filter_test_type.currentText(),
             "band": self.result_filter_band.currentText(),
-            "standard": self.result_filter_standard.currentText(),
             "bw_mhz": self.result_filter_bw.currentText(),
             "channel": self.result_filter_channel.currentText(),
+            "unit": self.result_filter_unit.currentText(),
+            "has_screenshot": self.result_filter_screenshot.currentText(),
             "search": self.result_search.text().strip().lower(),
         }
 
     def _apply_result_filters(self, rows: List[Dict], filters: Dict) -> List[Dict]:
         filtered = []
-        for r in rows:
-            if filters["test_type"] != "ALL" and str(r.get("test_type", "")) != filters["test_type"]:
+        for row in rows:
+            if filters["test_type"] != "ALL" and str(row.get("test_type", "")) != filters["test_type"]:
                 continue
-            if filters["band"] != "ALL" and str(r.get("band", "")) != filters["band"]:
+            if filters["band"] != "ALL" and str(row.get("band", "")) != filters["band"]:
                 continue
-            if filters["standard"] != "ALL" and str(r.get("standard", "")) != filters["standard"]:
+            if filters["bw_mhz"] != "ALL" and str(row.get("bw_mhz", "")) != filters["bw_mhz"]:
                 continue
-            if filters["bw_mhz"] != "ALL" and str(r.get("bw_mhz", "")) != filters["bw_mhz"]:
+            if filters["channel"] != "ALL" and str(row.get("channel", "")) != filters["channel"]:
                 continue
-            if filters["channel"] != "ALL" and str(r.get("channel", "")) != filters["channel"]:
+            if filters["unit"] != "ALL" and str(row.get("measurement_unit", "") or row.get("difference_unit", "")) != filters["unit"]:
+                continue
+            if filters["has_screenshot"] == "YES" and not row.get("has_screenshot"):
+                continue
+            if filters["has_screenshot"] == "NO" and row.get("has_screenshot"):
                 continue
 
             search_text = filters["search"]
             if search_text:
                 hay = " ".join([
-                    str(r.get("test_type", "")),
-                    str(r.get("band", "")),
-                    str(r.get("standard", "")),
-                    str(r.get("group", "")),
-                    str(r.get("channel", "")),
-                    str(r.get("bw_mhz", "")),
-                    str(r.get("reason", "")),
-                    str(r.get("test_key", "")),
+                    str(row.get("test_type", "")),
+                    str(row.get("band", "")),
+                    str(row.get("channel", "")),
+                    str(row.get("bw_mhz", "")),
+                    str(row.get("measurement_unit", "")),
+                    str(row.get("reason", "")),
+                    str(row.get("test_key", "")),
+                    str(row.get("measurement_profile_name", "")),
+                    str(row.get("comparator", "")),
                 ]).lower()
                 if search_text not in hay:
                     continue
-            filtered.append(r)
+            filtered.append(row)
         return filtered
 
     def _refresh_result_filter_options(self, rows: List[Dict]) -> None:
         current_test = self.result_filter_test_type.currentText()
         current_band = self.result_filter_band.currentText()
-        current_standard = self.result_filter_standard.currentText()
         current_bw = self.result_filter_bw.currentText()
         current_channel = self.result_filter_channel.currentText()
+        current_unit = self.result_filter_unit.currentText()
 
         test_types = sorted({str(r.get("test_type", "")).strip() for r in rows if r.get("test_type")})
         bands = sorted({str(r.get("band", "")).strip() for r in rows if r.get("band")})
-        standards = sorted({str(r.get("standard", "")).strip() for r in rows if r.get("standard")})
-        bw_values = sorted({int(r.get("bw_mhz")) for r in rows if r.get("bw_mhz") is not None and str(r.get("bw_mhz")).strip() != ""})
-        channel_values = sorted({int(r.get("channel")) for r in rows if r.get("channel") is not None and str(r.get("channel")).strip() != ""})
+        bw_values = sorted({int(r.get("bw_mhz")) for r in rows if r.get("bw_mhz") not in (None, "")})
+        channel_values = sorted({int(r.get("channel")) for r in rows if r.get("channel") not in (None, "")})
+        units = sorted({
+            str(r.get("measurement_unit", "") or r.get("difference_unit", "")).strip()
+            for r in rows
+            if str(r.get("measurement_unit", "") or r.get("difference_unit", "")).strip()
+        })
 
         combos = [
             self.result_filter_test_type,
             self.result_filter_band,
-            self.result_filter_standard,
             self.result_filter_bw,
             self.result_filter_channel,
+            self.result_filter_unit,
         ]
         for cb in combos:
             cb.blockSignals(True)
 
         self.result_filter_test_type.clear()
         self.result_filter_test_type.addItem("ALL")
-        for v in test_types:
-            self.result_filter_test_type.addItem(v)
+        for value in test_types:
+            self.result_filter_test_type.addItem(value)
 
         self.result_filter_band.clear()
         self.result_filter_band.addItem("ALL")
-        for v in bands:
-            self.result_filter_band.addItem(v)
-
-        self.result_filter_standard.clear()
-        self.result_filter_standard.addItem("ALL")
-        for v in standards:
-            self.result_filter_standard.addItem(v)
+        for value in bands:
+            self.result_filter_band.addItem(value)
 
         self.result_filter_bw.clear()
         self.result_filter_bw.addItem("ALL")
-        for v in bw_values:
-            self.result_filter_bw.addItem(str(v))
+        for value in bw_values:
+            self.result_filter_bw.addItem(str(value))
 
         self.result_filter_channel.clear()
         self.result_filter_channel.addItem("ALL")
-        for v in channel_values:
-            self.result_filter_channel.addItem(str(v))
+        for value in channel_values:
+            self.result_filter_channel.addItem(str(value))
+
+        self.result_filter_unit.clear()
+        self.result_filter_unit.addItem("ALL")
+        for value in units:
+            self.result_filter_unit.addItem(value)
 
         idx = self.result_filter_test_type.findText(current_test)
         self.result_filter_test_type.setCurrentIndex(idx if idx >= 0 else 0)
         idx = self.result_filter_band.findText(current_band)
         self.result_filter_band.setCurrentIndex(idx if idx >= 0 else 0)
-        idx = self.result_filter_standard.findText(current_standard)
-        self.result_filter_standard.setCurrentIndex(idx if idx >= 0 else 0)
         idx = self.result_filter_bw.findText(current_bw)
         self.result_filter_bw.setCurrentIndex(idx if idx >= 0 else 0)
         idx = self.result_filter_channel.findText(current_channel)
         self.result_filter_channel.setCurrentIndex(idx if idx >= 0 else 0)
+        idx = self.result_filter_unit.findText(current_unit)
+        self.result_filter_unit.setCurrentIndex(idx if idx >= 0 else 0)
 
         for cb in combos:
             cb.blockSignals(False)
@@ -442,6 +450,7 @@ class ResultsTab(QWidget):
         if not project_id or not run_id:
             self.results_model.set_rows([])
             self.steps_model.set_rows([])
+            self.result_detail.clear()
             self._update_results_summary([])
             return
 
@@ -476,6 +485,11 @@ class ResultsTab(QWidget):
             self.results_table.resizeColumnsToContents()
             self._update_results_summary(filtered)
             self._update_result_quick_buttons_style()
+            if filtered:
+                self.results_table.selectRow(0)
+            else:
+                self.steps_model.set_rows([])
+                self.result_detail.clear()
 
         self._start_task(
             action="load_results",
@@ -488,9 +502,10 @@ class ResultsTab(QWidget):
         self.result_filter_status.setCurrentText("ALL")
         self.result_filter_test_type.setCurrentText("ALL")
         self.result_filter_band.setCurrentText("ALL")
-        self.result_filter_standard.setCurrentText("ALL")
         self.result_filter_bw.setCurrentText("ALL")
         self.result_filter_channel.setCurrentText("ALL")
+        self.result_filter_unit.setCurrentText("ALL")
+        self.result_filter_screenshot.setCurrentText("ALL")
         self.result_search.clear()
         self._update_result_quick_buttons_style()
         if self.run_combo.currentData():
@@ -503,12 +518,14 @@ class ResultsTab(QWidget):
         sel = self.results_table.selectionModel().selectedRows()
         if not sel:
             self.steps_model.set_rows([])
+            self.result_detail.clear()
             return
 
         row = self.results_model.get_row(sel[0].row())
         result_id = row.get("result_id")
         if not result_id:
             self.steps_model.set_rows([])
+            self.result_detail.clear()
             return
 
         try:
@@ -516,9 +533,30 @@ class ResultsTab(QWidget):
         except Exception:
             log.exception("load step results failed | result_id=%s", result_id)
             self.steps_model.set_rows([])
+            self.result_detail.clear()
             return
         self.steps_model.set_rows([format_step_result_row(s) for s in steps])
         self.steps_table.resizeColumnsToContents()
+        self.result_detail.setPlainText(self._build_result_detail_text(row))
+
+    def _build_result_detail_text(self, row: Dict) -> str:
+        lines = [
+            f"Status: {row.get('status', '')}",
+            f"Measured: {format_numeric_value(row.get('measured_value'))}",
+            f"Limit: {format_numeric_value(row.get('limit_value'))}",
+            f"Difference: {format_difference(row.get('difference_value'), row.get('difference_unit', ''))}",
+            f"Unit: {row.get('measurement_unit', '') or row.get('difference_unit', '')}",
+            f"Comparator: {row.get('comparator', '')}",
+            f"Method: {row.get('measurement_method', '')}",
+            f"Profile: {row.get('measurement_profile_name', '')}",
+            f"Voltage Condition: {row.get('voltage_condition', '')}",
+            f"Nominal Voltage (V): {row.get('nominal_voltage_v', '')}",
+            f"Target Voltage (V): {row.get('target_voltage_v', '')}",
+            f"Screenshot: {row.get('screenshot_path', '') or row.get('screenshot_abs_path', '') or '(none)'}",
+            f"Case Key: {row.get('test_key', '')}",
+            f"Reason: {row.get('reason', '')}",
+        ]
+        return "\n".join(lines)
 
     def rerun_from_selection(self):
         project_id = self.get_project_id()
@@ -538,9 +576,9 @@ class ResultsTab(QWidget):
 
         selected_rows = []
         for idx in sel:
-            r = self.results_model.get_row(idx.row())
-            if r:
-                selected_rows.append(r)
+            row = self.results_model.get_row(idx.row())
+            if row:
+                selected_rows.append(row)
 
         try:
             new_preset_id = self.svc.create_rerun_preset_from_selected_results(
@@ -563,18 +601,32 @@ class ResultsTab(QWidget):
             limit=limit,
         )
 
+    def _build_results_export_row(self, row: Dict) -> Dict:
+        export_row = dict(row or {})
+        export_row["measured_value"] = format_numeric_value(export_row.get("measured_value"))
+        export_row["limit_value"] = format_numeric_value(export_row.get("limit_value"))
+        export_row["difference_display"] = format_difference(
+            export_row.get("difference_value"),
+            export_row.get("difference_unit", ""),
+        )
+        export_row["target_voltage_v_display"] = self._format_voltage(export_row.get("target_voltage_v"))
+        export_row["screenshot"] = "Yes" if export_row.get("has_screenshot") else ""
+        return export_row
+
     def _write_results_csv(self, path: str, rows: List[Dict]) -> None:
         cols = [
             ("status", "Status"),
             ("test_type", "Test"),
             ("band", "Band"),
-            ("standard", "Standard"),
-            ("group", "Group"),
-            ("channel", "CH"),
             ("bw_mhz", "BW(MHz)"),
-            ("margin_db", "Margin(dB)"),
+            ("channel", "CH"),
+            ("voltage_condition", "Voltage Cond"),
+            ("target_voltage_v_display", "Voltage (V)"),
             ("measured_value", "Measured"),
             ("limit_value", "Limit"),
+            ("difference_display", "Difference"),
+            ("measurement_unit", "Unit"),
+            ("screenshot", "Screenshot"),
             ("reason", "Reason"),
             ("test_key", "Key"),
             ("result_id", "Result ID"),
@@ -583,20 +635,23 @@ class ResultsTab(QWidget):
             writer = csv.writer(f)
             writer.writerow([header for _, header in cols])
             for row in rows:
-                writer.writerow([row.get(key, "") for key, _ in cols])
+                export_row = self._build_results_export_row(row)
+                writer.writerow([export_row.get(key, "") for key, _ in cols])
 
     def _write_results_excel(self, path: str, rows: List[Dict]) -> None:
         cols = [
             ("status", "Status"),
             ("test_type", "Test"),
             ("band", "Band"),
-            ("standard", "Standard"),
-            ("group", "Group"),
-            ("channel", "CH"),
             ("bw_mhz", "BW(MHz)"),
-            ("margin_db", "Margin(dB)"),
+            ("channel", "CH"),
+            ("voltage_condition", "Voltage Cond"),
+            ("target_voltage_v_display", "Voltage (V)"),
             ("measured_value", "Measured"),
             ("limit_value", "Limit"),
+            ("difference_display", "Difference"),
+            ("measurement_unit", "Unit"),
+            ("screenshot", "Screenshot"),
             ("reason", "Reason"),
             ("test_key", "Key"),
             ("result_id", "Result ID"),
@@ -611,13 +666,22 @@ class ResultsTab(QWidget):
             cell.alignment = Alignment(vertical="center")
 
         for r_i, row in enumerate(rows, start=2):
+            export_row = self._build_results_export_row(row)
             for c_i, (key, _) in enumerate(cols, start=1):
-                ws.cell(row=r_i, column=c_i, value=row.get(key, ""))
+                ws.cell(row=r_i, column=c_i, value=export_row.get(key, ""))
 
-        for c_i in range(1, len(cols) + 1):
-            ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = 16
-        ws.column_dimensions["K"].width = 40
+        widths = [12, 12, 10, 10, 8, 16, 12, 14, 14, 18, 14, 12, 40, 26, 26]
+        for c_i, width in enumerate(widths, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = width
         wb.save(path)
+
+    def _format_voltage(self, value) -> str:
+        try:
+            if value in (None, ""):
+                return ""
+            return f"{float(value):g}"
+        except Exception:
+            return str(value or "")
 
     def export_results_csv(self):
         project_id = self.get_project_id()

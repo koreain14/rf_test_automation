@@ -43,6 +43,7 @@ class PresetSerializer:
             plan_mode=str(selection_raw.get("plan_mode", "DEMO")),
             measurement_profile_name=_resolve_measurement_profile_name(selection_raw),
             psd_result_unit=normalize_psd_result_unit(selection_raw.get("psd_result_unit")),
+            nominal_voltage_v=_optional_float(selection_raw.get("nominal_voltage_v")),
             test_types=normalize_test_type_list(selection_raw.get("test_types") or []),
             bandwidth_mhz=bandwidth_summary,
             channels=ChannelSelectionModel(
@@ -96,6 +97,11 @@ class PresetSerializer:
             selection["psd_result_unit"] = psd_result_unit
         else:
             selection.pop("psd_result_unit", None)
+        nominal_voltage_v = _optional_float(selection.get("nominal_voltage_v"))
+        if nominal_voltage_v is not None:
+            selection["nominal_voltage_v"] = nominal_voltage_v
+        else:
+            selection.pop("nominal_voltage_v", None)
         wlan_payload = _serialize_wlan_expansion(model.selection.wlan_expansion)
         selection["wlan_expansion"] = wlan_payload
         metadata = _serialize_selection_metadata(model.selection.metadata, wlan_payload)
@@ -240,3 +246,13 @@ def _derive_channel_summary(model: WlanExpansionModel) -> list[int]:
             if ich not in out:
                 out.append(ich)
     return sorted(out)
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        number = float(value)
+    except Exception:
+        return None
+    return number if number > 0 else None

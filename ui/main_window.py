@@ -196,14 +196,16 @@ class MainWindow(QMainWindow):
         self.btn_skip.setToolTip("Row-level skip is disabled in filter-driven execution mode.")
 
         self.lbl_status = QLabel("Idle")
+        self.lbl_status.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.lbl_status.setMinimumHeight(28)
 
         self.progress_run = QProgressBar()
         self.progress_run.setMinimum(0)
         self.progress_run.setMaximum(100)
         self.progress_run.setValue(0)
-        self.progress_run.setTextVisible(True)
-        self.progress_run.setFormat("Idle")
+        self.progress_run.setTextVisible(False)
         self.progress_run.setFixedWidth(260)
+        self.progress_run.setMinimumHeight(28)
 
         self._build_run_toolbar()
         self.addToolBarBreak()
@@ -556,6 +558,12 @@ class MainWindow(QMainWindow):
                 lines.append(f"- Bandwidth: {previous.get('bw_mhz')} MHz")
             if previous.get("phy_mode") not in (None, ""):
                 lines.append(f"- Mode: {previous.get('phy_mode')}")
+            if previous.get("voltage_condition") not in (None, ""):
+                lines.append(f"- Voltage Condition: {previous.get('voltage_condition')}")
+            if previous.get("target_voltage_v") not in (None, ""):
+                lines.append(f"- Target Voltage: {previous.get('target_voltage_v')} V")
+            if previous.get("nominal_voltage_v") not in (None, ""):
+                lines.append(f"- Nominal Voltage: {previous.get('nominal_voltage_v')} V")
             lines.append("")
 
         lines.append("New setup:")
@@ -567,6 +575,12 @@ class MainWindow(QMainWindow):
             lines.append(f"- Bandwidth: {current.get('bw_mhz')} MHz")
         if current.get("phy_mode") not in (None, ""):
             lines.append(f"- Mode: {current.get('phy_mode')}")
+        if current.get("voltage_condition") not in (None, ""):
+            lines.append(f"- Voltage Condition: {current.get('voltage_condition')}")
+        if current.get("target_voltage_v") not in (None, ""):
+            lines.append(f"- Target Voltage: {current.get('target_voltage_v')} V")
+        if current.get("nominal_voltage_v") not in (None, ""):
+            lines.append(f"- Nominal Voltage: {current.get('nominal_voltage_v')} V")
 
         if instructions:
             lines.append("")

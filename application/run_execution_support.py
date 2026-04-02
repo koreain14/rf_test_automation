@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
@@ -471,10 +472,134 @@ class RunMetadataRecorder:
         )
 
 
+class VoltageConditionController:
+    def __init__(self, run_repo: RunRepositorySQLite):
+        self.run_repo = run_repo
+
+    def apply_case_voltage(
+        self,
+        *,
+        project_id: str,
+        result_id: str,
+        run_id: str,
+        case,
+        session,
+        power_control: dict[str, Any] | None = None,
+        equipment_profile_name: str | None = None,
+    ) -> None:
+        tags = dict(getattr(case, "tags", {}) or {})
+        data = {
+            "ruleset_id": tags.get("ruleset_id", ""),
+            "voltage_policy_enabled": bool(tags.get("voltage_policy_enabled")),
+            "voltage_policy_active": bool(tags.get("voltage_policy_active")),
+            "voltage_policy_status": str(tags.get("voltage_policy_status", "") or ""),
+            "voltage_condition": str(tags.get("voltage_condition", "") or ""),
+            "nominal_voltage_v": tags.get("nominal_voltage_v"),
+            "target_voltage_v": tags.get("target_voltage_v"),
+            "voltage_percent_offset": tags.get("voltage_percent_offset"),
+            "voltage_settle_time_ms": int(tags.get("voltage_settle_time_ms", 0) or 0),
+            "case_key": getattr(case, "key", ""),
+            "test_type": getattr(case, "test_type", ""),
+            "channel": getattr(case, "channel", ""),
+            "bandwidth_mhz": getattr(case, "bw_mhz", ""),
+            "equipment_profile_name": equipment_profile_name or "",
+        }
+
+        if not data["voltage_policy_enabled"]:
+            return
+
+        target_voltage_v = self._as_float(data.get("target_voltage_v"))
+        condition = str(data.get("voltage_condition", "") or "")
+        power_supply = getattr(session, "power_supply", None) if session is not None else None
+
+        if not condition or target_voltage_v is None:
+            data["apply_status"] = "SKIPPED"
+            data["message"] = "Voltage policy is enabled but case voltage metadata is inactive."
+            self._append_step_result(project_id=project_id, result_id=result_id, status="INFO", data=data)
+            log.warning(
+                "case voltage skipped | run=%s case=%s status=%s nominal_voltage_v=%s condition=%s target_voltage_v=%s",
+                run_id,
+                getattr(case, "key", ""),
+                data["voltage_policy_status"],
+                data.get("nominal_voltage_v"),
+                condition,
+                data.get("target_voltage_v"),
+            )
+            return
+
+        if power_supply is None:
+            data["apply_status"] = "NO_PSU"
+            data["message"] = "No configured power supply session. Continuing without voltage apply."
+            self._append_step_result(project_id=project_id, result_id=result_id, status="WARN", data=data)
+            log.warning(
+                "case voltage apply skipped | run=%s case=%s condition=%s target_voltage_v=%s reason=no_power_supply_session",
+                run_id,
+                getattr(case, "key", ""),
+                condition,
+                target_voltage_v,
+            )
+            return
+
+        try:
+            if not hasattr(power_supply, "set_voltage"):
+                raise RuntimeError(f"{type(power_supply).__name__} does not support set_voltage()")
+            power_supply.set_voltage(float(target_voltage_v))
+            if bool((power_control or {}).get("output_on")) and hasattr(power_supply, "output_on"):
+                power_supply.output_on()
+            settle_time_ms = int(data.get("voltage_settle_time_ms", 0) or 0)
+            if settle_time_ms > 0:
+                time.sleep(float(settle_time_ms) / 1000.0)
+            data["apply_status"] = "APPLIED"
+            data["message"] = "Voltage condition applied."
+            self._append_step_result(project_id=project_id, result_id=result_id, status="OK", data=data)
+            log.info(
+                "case voltage applied | run=%s case=%s ruleset_id=%s condition=%s nominal_voltage_v=%s target_voltage_v=%s settle_time_ms=%s power_supply=%s",
+                run_id,
+                getattr(case, "key", ""),
+                data.get("ruleset_id", ""),
+                condition,
+                data.get("nominal_voltage_v"),
+                target_voltage_v,
+                data.get("voltage_settle_time_ms", 0),
+                type(power_supply).__name__,
+            )
+        except Exception as exc:
+            data["apply_status"] = "ERROR"
+            data["message"] = str(exc)
+            self._append_step_result(project_id=project_id, result_id=result_id, status="WARN", data=data)
+            log.warning(
+                "case voltage apply failed | run=%s case=%s condition=%s target_voltage_v=%s error=%s",
+                run_id,
+                getattr(case, "key", ""),
+                condition,
+                target_voltage_v,
+                exc,
+            )
+
+    def _append_step_result(self, *, project_id: str, result_id: str, status: str, data: dict[str, Any]) -> None:
+        self.run_repo.append_step_result(
+            project_id=project_id,
+            result_id=result_id,
+            step_name="VOLTAGE_CONDITION",
+            status=status,
+            data=data,
+        )
+
+    @staticmethod
+    def _as_float(value: Any) -> float | None:
+        try:
+            if value in (None, ""):
+                return None
+            return float(value)
+        except Exception:
+            return None
+
+
 class CaseExecutionPipeline:
     def __init__(self, run_repo: RunRepositorySQLite, metadata_recorder: RunMetadataRecorder):
         self.run_repo = run_repo
         self.metadata_recorder = metadata_recorder
+        self.voltage_controller = VoltageConditionController(run_repo)
 
     def create_runner(self, *, project_id: str) -> StepRunner:
         sink = StepResultSinkSQLite(self.run_repo, project_id)
@@ -535,18 +660,26 @@ class CaseExecutionPipeline:
 
     def build_dut_prompt_payload(self, previous_case, current_case, dut_control_mode: str) -> dict[str, Any]:
         prev_key = self.case_setup_key(previous_case) if previous_case is not None else None
+        previous_tags = dict(getattr(previous_case, "tags", {}) or {}) if previous_case is not None else {}
+        current_tags = dict(getattr(current_case, "tags", {}) or {})
         curr_key = self.case_setup_key(current_case)
         previous = {
             "band": getattr(previous_case, "band", None) if previous_case is not None else None,
             "center_freq_mhz": getattr(previous_case, "center_freq_mhz", None) if previous_case is not None else None,
             "bw_mhz": getattr(previous_case, "bw_mhz", None) if previous_case is not None else None,
-            "phy_mode": (dict(getattr(previous_case, "tags", {}) or {}).get("phy_mode") if previous_case is not None else None),
+            "phy_mode": previous_tags.get("phy_mode"),
+            "voltage_condition": previous_tags.get("voltage_condition"),
+            "target_voltage_v": previous_tags.get("target_voltage_v"),
+            "nominal_voltage_v": previous_tags.get("nominal_voltage_v"),
         }
         current = {
             "band": getattr(current_case, "band", None),
             "center_freq_mhz": getattr(current_case, "center_freq_mhz", None),
             "bw_mhz": getattr(current_case, "bw_mhz", None),
-            "phy_mode": dict(getattr(current_case, "tags", {}) or {}).get("phy_mode"),
+            "phy_mode": current_tags.get("phy_mode"),
+            "voltage_condition": current_tags.get("voltage_condition"),
+            "target_voltage_v": current_tags.get("target_voltage_v"),
+            "nominal_voltage_v": current_tags.get("nominal_voltage_v"),
         }
         instructions = []
         if prev_key is None or previous.get("center_freq_mhz") != current.get("center_freq_mhz"):
@@ -557,6 +690,10 @@ class CaseExecutionPipeline:
             instructions.append(f"Mode: {current.get('phy_mode') or current_case.standard}")
         if prev_key is None or previous.get("band") != current.get("band"):
             instructions.append(f"Band: {current.get('band')}")
+        if prev_key is None or previous.get("voltage_condition") != current.get("voltage_condition"):
+            instructions.append(f"Voltage Condition: {current.get('voltage_condition') or '-'}")
+        if prev_key is None or previous.get("target_voltage_v") != current.get("target_voltage_v"):
+            instructions.append(f"Target Voltage: {current.get('target_voltage_v')} V")
         return {
             "dut_control_mode": dut_control_mode,
             "previous_setup_key": prev_key,
@@ -580,6 +717,9 @@ class CaseExecutionPipeline:
         case,
         ruleset,
         inst,
+        session=None,
+        power_control: dict[str, Any] | None = None,
+        equipment_profile_name: str | None = None,
     ) -> tuple[str, str]:
         result_id = self.metadata_recorder.create_result_stub(
             project_id=project_id,
@@ -595,6 +735,15 @@ class CaseExecutionPipeline:
             recipe=recipe,
             case=case,
             ruleset=ruleset,
+        )
+        self.voltage_controller.apply_case_voltage(
+            project_id=project_id,
+            result_id=result_id,
+            run_id=run_id,
+            case=case,
+            session=session,
+            power_control=power_control,
+            equipment_profile_name=equipment_profile_name,
         )
         values = runner.run_case(run_id, result_id, case, inst)
         verdict = self.metadata_recorder.update_final_result(result_id=result_id, values=values)
@@ -651,4 +800,6 @@ class CaseExecutionPipeline:
             float(getattr(case, "center_freq_mhz", 0.0) or 0.0),
             float(getattr(case, "bw_mhz", 0.0) or 0.0),
             phy_mode,
+            str(tags.get("voltage_condition") or ""),
+            float(tags.get("target_voltage_v", 0.0) or 0.0),
         )

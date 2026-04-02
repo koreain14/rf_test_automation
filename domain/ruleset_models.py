@@ -4,6 +4,53 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def normalize_voltage_policy(raw: Dict[str, Any] | None) -> Dict[str, Any]:
+    data = dict(raw or {})
+    levels_raw = list(data.get("levels") or [])
+    levels: List[Dict[str, Any]] = []
+    for item in levels_raw:
+        row = dict(item or {})
+        name = str(row.get("name", "")).strip().upper()
+        if not name:
+            continue
+        percent_offset = _coerce_float(
+            row.get("percent_offset", row.get("offset_percent", row.get("percent")))
+        )
+        levels.append(
+            {
+                "name": name,
+                "label": str(row.get("label", name)).strip() or name,
+                "percent_offset": 0.0 if percent_offset is None else float(percent_offset),
+            }
+        )
+
+    settle_time_ms = data.get("settle_time_ms", 0)
+    try:
+        settle_time_ms = int(settle_time_ms or 0)
+    except Exception:
+        settle_time_ms = 0
+    if settle_time_ms < 0:
+        settle_time_ms = 0
+
+    return {
+        "enabled": bool(data.get("enabled", False)),
+        "mode": str(data.get("mode", "PERCENT_OF_NOMINAL")).strip() or "PERCENT_OF_NOMINAL",
+        "nominal_source": str(data.get("nominal_source", "preset.nominal_voltage_v")).strip() or "preset.nominal_voltage_v",
+        "levels": levels,
+        "settle_time_ms": settle_time_ms,
+        "fallback_policy": str(data.get("fallback_policy", "WARN_AND_CONTINUE")).strip() or "WARN_AND_CONTINUE",
+    }
+
+
 @dataclass(frozen=True)
 class ChannelGroup:
     name: str
@@ -160,6 +207,7 @@ class RuleSet:
     bands: Dict[str, BandInfo]
     instrument_profiles: Dict[str, InstrumentProfile]
     plan_modes: Dict[str, PlanMode]
+    voltage_policy: Dict[str, Any]
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "RuleSet":
@@ -199,4 +247,5 @@ class RuleSet:
             bands=bands,
             instrument_profiles=instrument_profiles,
             plan_modes=plan_modes,
+            voltage_policy=normalize_voltage_policy(d.get("voltage_policy") or {}),
         )

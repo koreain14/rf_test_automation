@@ -265,6 +265,30 @@
       "channel_policy": "ALL_CHANNELS"
     }
   },
+  "voltage_policy": {
+    "enabled": true,
+    "mode": "PERCENT_OF_NOMINAL",
+    "nominal_source": "preset.nominal_voltage_v",
+    "settle_time_ms": 500,
+    "fallback_policy": "WARN_AND_CONTINUE",
+    "levels": [
+      {
+        "name": "LOW",
+        "label": "Low (-5%)",
+        "percent_offset": -5
+      },
+      {
+        "name": "NOMINAL",
+        "label": "Nominal",
+        "percent_offset": 0
+      },
+      {
+        "name": "HIGH",
+        "label": "High (+5%)",
+        "percent_offset": 5
+      }
+    ]
+  },
   "test_labels": {
     "PSD": "Power Spectral Density (PSD)",
     "OBW": "Occupied Bandwidth (OBW)",

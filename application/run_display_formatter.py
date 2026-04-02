@@ -9,12 +9,24 @@ def _render_case_bits(case: Dict[str, Any] | None) -> str:
     if not case:
         return ""
     parts = []
-    channel = case.get("channel")
     test_type = str(case.get("test_type") or "").strip()
+    channel = case.get("channel")
+    voltage_condition = str(case.get("voltage_condition") or "").strip()
+    target_voltage_v = case.get("target_voltage_v")
+    target_voltage_text = ""
+    try:
+        if target_voltage_v not in (None, ""):
+            target_voltage_text = f"{float(target_voltage_v):g}V"
+    except Exception:
+        target_voltage_text = str(target_voltage_v or "").strip()
     if channel not in (None, ""):
         parts.append(f"CH{channel}")
     if test_type:
         parts.append(test_type)
+    if voltage_condition:
+        parts.append(voltage_condition)
+    if target_voltage_text:
+        parts.append(target_voltage_text)
     return " | ".join(parts)
 
 
@@ -26,12 +38,16 @@ def build_status_text(
     progress: str = "",
     counts: str = "",
     last_status: str = "",
+    case: Dict[str, Any] | None = None,
 ) -> str:
     suffix = build_status_suffix(meta)
     base = f"{state} {run_id[:8] if run_id else '--------'}{suffix}"
     tail = []
+    case_bits = _render_case_bits(case)
     if progress:
         tail.append(progress)
+    if case_bits:
+        tail.append(case_bits)
     if counts:
         tail.append(counts)
     if last_status:

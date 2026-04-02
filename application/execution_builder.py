@@ -47,6 +47,9 @@ class ExecutionBuilder:
                 "psd_limit_unit": str((case.get("tags") or {}).get("psd_limit_unit", "")),
                 "psd_unit_policy_source": str((case.get("tags") or {}).get("psd_unit_policy_source", "")),
                 "device_class": str((case.get("tags") or {}).get("device_class", "")),
+                "voltage_condition": str((case.get("tags") or {}).get("voltage_condition", "")),
+                "nominal_voltage_v": (case.get("tags") or {}).get("nominal_voltage_v"),
+                "target_voltage_v": (case.get("tags") or {}).get("target_voltage_v"),
             },
         )
         return [step]
@@ -89,6 +92,9 @@ class ExecutionBuilder:
             "bandwidth_mhz": self._safe_int(case.get("bandwidth_mhz") or case.get("bw_mhz")),
             "channel": self._safe_int(case.get("channel")),
             "frequency_mhz": self._safe_float(case.get("frequency_mhz") or case.get("center_freq_mhz")),
+            "voltage_condition": (case.get("tags") or {}).get("voltage_condition", ""),
+            "nominal_voltage_v": (case.get("tags") or {}).get("nominal_voltage_v"),
+            "target_voltage_v": (case.get("tags") or {}).get("target_voltage_v"),
         }
 
     def _required_capabilities(self, test_type: str) -> List[str]:

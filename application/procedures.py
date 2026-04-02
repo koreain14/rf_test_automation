@@ -252,6 +252,7 @@ class PsdMeasureStep:
                     from_unit=display_unit,
                     to_unit=PSD_CANONICAL_UNIT,
                 )
+                difference_value = round(measured - limit_value, 6)
                 margin = canonical_limit - canonical_measured
                 display_payload = build_psd_display_payload(
                     canonical_value_dbm_per_mhz=canonical_measured,
@@ -276,6 +277,9 @@ class PsdMeasureStep:
                     "psd_limit_unit": limit_unit,
                     "psd_limit_label": self._display_unit_label(limit_unit),
                     "psd_unit_policy_source": str((getattr(ctx.case, "tags", {}) or {}).get("psd_unit_policy_source", "")),
+                    "difference_value": difference_value,
+                    "difference_unit": self._display_unit_label(display_unit),
+                    "comparator": "upper_limit",
                     "display_measured_value": display_payload["display_value"],
                     "display_limit_value": display_limit_payload["display_value"],
                     "display_measurement_unit": self._display_unit_label(display_payload["display_unit"]),
@@ -349,6 +353,12 @@ class PsdMeasureStep:
             ctx.values["display_limit_value"] = result.get("display_limit_value")
         if result.get("display_measurement_unit"):
             ctx.values["display_measurement_unit"] = result.get("display_measurement_unit")
+        if result.get("difference_value") is not None:
+            ctx.values["difference_value"] = result.get("difference_value")
+        if result.get("difference_unit"):
+            ctx.values["difference_unit"] = result.get("difference_unit")
+        if result.get("comparator"):
+            ctx.values["comparator"] = result.get("comparator")
         if result.get("psd_result_unit"):
             ctx.values["psd_result_unit"] = result.get("psd_result_unit")
         if result.get("psd_canonical_unit"):
@@ -390,6 +400,9 @@ class PsdMeasureStep:
                 "display_measured_value": result.get("display_measured_value"),
                 "display_limit_value": result.get("display_limit_value"),
                 "display_measurement_unit": result.get("display_measurement_unit", "dBm/MHz"),
+                "difference_value": result.get("difference_value"),
+                "difference_unit": result.get("difference_unit", result.get("measurement_unit", "")),
+                "comparator": result.get("comparator", "upper_limit"),
                 "scpi_power_unit": result.get("scpi_power_unit", ""),
                 "scpi_measurement_method": result.get("scpi_measurement_method", ""),
                 "ruleset_id": result.get("ruleset_id", ""),
@@ -540,6 +553,12 @@ class ObwMeasureStep:
             ctx.values["backend_idn"] = result.get("backend_idn")
         if result.get("error_message"):
             ctx.values["error_message"] = result.get("error_message")
+        if result.get("difference_value") is not None:
+            ctx.values["difference_value"] = result.get("difference_value")
+        if result.get("difference_unit"):
+            ctx.values["difference_unit"] = result.get("difference_unit")
+        if result.get("comparator"):
+            ctx.values["comparator"] = result.get("comparator")
         _apply_screenshot_to_context(ctx, result)
 
         return StepResult(
@@ -556,6 +575,9 @@ class ObwMeasureStep:
                 "backend_idn": result.get("backend_idn", idn),
                 "measurement_profile_name": resolved_profile.get("profile_name", ""),
                 "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "difference_value": result.get("difference_value"),
+                "difference_unit": result.get("difference_unit", result.get("measurement_unit", "")),
+                "comparator": result.get("comparator", "upper_limit"),
                 "screenshot_capture_status": result.get("screenshot_capture_status", ""),
                 "screenshot_capture_error": result.get("screenshot_capture_error", ""),
                 "screenshot_path": result.get("screenshot_path", ""),

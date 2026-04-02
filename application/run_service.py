@@ -71,6 +71,19 @@ class RunService:
                 if should_stop():
                     return "ABORTED"
 
+                tags = dict(getattr(case, "tags", {}) or {})
+                current_case_info = {
+                    "channel": case.channel,
+                    "test_type": case.test_type,
+                    "standard": case.standard,
+                    "case_key": case.key,
+                    "voltage_condition": tags.get("voltage_condition", ""),
+                    "target_voltage_v": tags.get("target_voltage_v"),
+                    "nominal_voltage_v": tags.get("nominal_voltage_v"),
+                }
+                if on_progress:
+                    on_progress(count, "RUNNING", current_case_info)
+
                 # dummy time
                 time.sleep(0.01)
 
@@ -97,7 +110,7 @@ class RunService:
 
                 count += 1
                 if on_progress and (count % 20 == 0):
-                    on_progress(count, status, {"channel": case.channel, "test_type": case.test_type, "standard": case.standard, "case_key": case.key})
+                    on_progress(count, status, current_case_info)
 
             return "DONE"
         except Exception:

@@ -57,7 +57,7 @@ class StepRunner:
         )
         ctx.values["measurement_profile_source"] = ctx.values["resolved_profile"].get("profile_source", "")
         log.info(
-            "run_case measurement profile resolved | case=%s test_type=%s ruleset_id=%s band=%s device_class=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s psd_method=%s psd_result_unit=%s psd_limit_value=%s psd_limit_unit=%s",
+            "run_case measurement profile resolved | case=%s test_type=%s ruleset_id=%s band=%s device_class=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s instrument_snapshot_source=%s runtime_profile_precedence=%s legacy_fallback_fields=%s ignored_snapshot_fields=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s psd_method=%s psd_result_unit=%s psd_limit_value=%s psd_limit_unit=%s",
             getattr(case, "key", ""),
             getattr(case, "test_type", ""),
             dict(getattr(case, "tags", {}) or {}).get("ruleset_id", ""),
@@ -68,6 +68,10 @@ class StepRunner:
             dict(getattr(case, "tags", {}) or {}).get("measurement_profile_name", ""),
             ctx.values["resolved_profile"].get("profile_name", ""),
             ctx.values["resolved_profile"].get("profile_source", ""),
+            ctx.values["resolved_profile"].get("instrument_snapshot_source", ""),
+            ctx.values["resolved_profile"].get("runtime_profile_precedence", ""),
+            ctx.values["resolved_profile"].get("legacy_instrument_fallback_fields", []),
+            ctx.values["resolved_profile"].get("ignored_instrument_snapshot_fields", []),
             ctx.values["resolved_profile"].get("trace_mode", ""),
             ctx.values["resolved_profile"].get("detector", ""),
             ctx.values["resolved_profile"].get("span_hz", ""),

@@ -251,6 +251,7 @@ class RunController:
 
         counts_text = f"P:{w._run_pass_count} F:{w._run_fail_count} S:{w._run_skip_count} E:{w._run_error_count}"
         progress_text = f"{count}/{total}" if total > 0 else str(count)
+        display_last_status = st if st in ("PASS", "FAIL", "SKIP", "ERROR") else ""
         w.lbl_status.setText(
             build_status_text(
                 w._last_run_id or "",
@@ -258,7 +259,8 @@ class RunController:
                 state="RUNNING",
                 progress=progress_text,
                 counts=counts_text,
-                last_status=st,
+                last_status=display_last_status,
+                case=current_case,
             )
         )
 

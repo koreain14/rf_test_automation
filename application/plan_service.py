@@ -7,6 +7,7 @@ from domain.models import (
     InstrumentProfile, Match, OverrideRule, Preset, Recipe, RuleSet, TestCase
 )
 from domain.expand import build_recipe, expand_recipe
+from domain.ruleset_models import normalize_voltage_policy
 from domain.overrides import apply_overrides
 from infrastructure.plan_repo_sqlite import PlanRepositorySQLite
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
@@ -74,6 +75,7 @@ class PlanService:
             plan_modes=plan_modes,          # <- 변경됨 (PlanMode dict)
             test_contracts=dict(raw.get("test_contracts", {}) or {}),
             test_labels={str(k): str(v) for k, v in (raw.get("test_labels", {}) or {}).items()},
+            voltage_policy=normalize_voltage_policy(raw.get("voltage_policy") or {}),
         )
 
         self._ruleset_cache[ruleset_id] = rs
@@ -566,8 +568,22 @@ class PlanService:
                 "channel": r.get("channel"),
                 "bw_mhz": r.get("bw_mhz"),
                 "margin_db": r.get("margin_db"),
+                "difference_value": r.get("difference_value"),
+                "difference_unit": r.get("difference_unit", ""),
+                "comparator": r.get("comparator", ""),
+                "measurement_unit": r.get("measurement_unit", ""),
+                "measurement_method": r.get("measurement_method", ""),
+                "measurement_profile_name": r.get("measurement_profile_name", ""),
+                "measurement_profile_source": r.get("measurement_profile_source", ""),
                 "measured_value": r.get("measured_value"),
                 "limit_value": r.get("limit_value"),
+                "screenshot_path": r.get("screenshot_path", ""),
+                "screenshot_abs_path": r.get("screenshot_abs_path", ""),
+                "has_screenshot": bool(r.get("has_screenshot")),
+                "voltage_condition": r.get("voltage_condition", ""),
+                "nominal_voltage_v": r.get("nominal_voltage_v"),
+                "target_voltage_v": r.get("target_voltage_v"),
+                "last_step_data": dict(r.get("last_step_data") or {}),
                 "reason": r.get("reason", ""),
                 "test_key": r.get("test_key", ""),
             })
@@ -585,6 +601,8 @@ class PlanService:
                 str(r.get("standard", "")),
                 str(r.get("channel", "")),
                 str(r.get("bw_mhz", "")),
+                str(r.get("voltage_condition", "")),
+                str(r.get("target_voltage_v", "")),
             )
 
         map_a = {make_key(r): r for r in rows_a}
@@ -596,10 +614,32 @@ class PlanService:
             b = map_b.get(key, {})
             margin_a = a.get("margin_db")
             margin_b = b.get("margin_db")
-            try:
-                delta_margin = round(float(margin_b) - float(margin_a), 3)
-            except Exception:
-                delta_margin = ""
+            difference_a = a.get("difference_value")
+            difference_b = b.get("difference_value")
+            measured_a = a.get("measured_value")
+            measured_b = b.get("measured_value")
+            difference_unit_a = str(a.get("difference_unit", "") or "")
+            difference_unit_b = str(b.get("difference_unit", "") or "")
+            measured_unit_a = str(a.get("measurement_unit", "") or difference_unit_a)
+            measured_unit_b = str(b.get("measurement_unit", "") or difference_unit_b)
+            if difference_unit_a and difference_unit_b and difference_unit_a == difference_unit_b:
+                try:
+                    delta_difference = round(float(difference_b) - float(difference_a), 3)
+                except Exception:
+                    delta_difference = ""
+                delta_difference_unit = difference_unit_a
+            else:
+                delta_difference = ""
+                delta_difference_unit = ""
+            if measured_unit_a and measured_unit_b and measured_unit_a == measured_unit_b:
+                try:
+                    delta_value = round(float(measured_b) - float(measured_a), 3)
+                except Exception:
+                    delta_value = ""
+                delta_unit = measured_unit_a
+            else:
+                delta_value = ""
+                delta_unit = ""
 
             status_a = a.get("status", "MISSING") if a else "MISSING"
             status_b = b.get("status", "MISSING") if b else "MISSING"
@@ -611,12 +651,43 @@ class PlanService:
                 "standard": key[3],
                 "channel": key[4],
                 "bw_mhz": key[5],
+                "voltage_condition": key[6],
                 "status_a": status_a,
                 "status_b": status_b,
                 "margin_a": "" if margin_a is None else margin_a,
                 "margin_b": "" if margin_b is None else margin_b,
-                "delta_margin": delta_margin,
-                "changed": (status_a != status_b) or (delta_margin != "" and delta_margin != 0),
+                "difference_a": "" if difference_a is None else difference_a,
+                "difference_b": "" if difference_b is None else difference_b,
+                "difference_unit": difference_unit_a or difference_unit_b,
+                "measured_a": "" if measured_a is None else measured_a,
+                "measured_b": "" if measured_b is None else measured_b,
+                "unit": measured_unit_a or measured_unit_b or difference_unit_a or difference_unit_b,
+                "delta_value": delta_value,
+                "delta_unit": delta_unit,
+                "delta_difference": delta_difference,
+                "delta_difference_unit": delta_difference_unit,
+                "limit_a": a.get("limit_value", ""),
+                "limit_b": b.get("limit_value", ""),
+                "comparator_a": a.get("comparator", ""),
+                "comparator_b": b.get("comparator", ""),
+                "screenshot_path_a": a.get("screenshot_path", ""),
+                "screenshot_path_b": b.get("screenshot_path", ""),
+                "screenshot_abs_path_a": a.get("screenshot_abs_path", ""),
+                "screenshot_abs_path_b": b.get("screenshot_abs_path", ""),
+                "has_screenshot_a": bool(a.get("has_screenshot")),
+                "has_screenshot_b": bool(b.get("has_screenshot")),
+                "voltage_condition": a.get("voltage_condition") or b.get("voltage_condition") or "",
+                "nominal_voltage_v_a": a.get("nominal_voltage_v"),
+                "nominal_voltage_v_b": b.get("nominal_voltage_v"),
+                "target_voltage_v_a": a.get("target_voltage_v"),
+                "target_voltage_v_b": b.get("target_voltage_v"),
+                "target_voltage_v_display_a": a.get("target_voltage_v"),
+                "target_voltage_v_display_b": b.get("target_voltage_v"),
+                "changed": (
+                    (status_a != status_b)
+                    or (delta_value != "" and delta_value != 0)
+                    or (delta_difference != "" and delta_difference != 0)
+                ),
             })
         return out
 

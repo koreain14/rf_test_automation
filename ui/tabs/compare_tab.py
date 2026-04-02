@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import logging
@@ -6,6 +6,7 @@ from typing import Callable, Dict, List
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -13,13 +14,17 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QTableView,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from application.result_difference import format_difference, format_difference_value, format_numeric_value
 from ui.workers.results_task_worker import ResultsTaskWorker
 
 
@@ -43,6 +48,7 @@ class CompareTab(QWidget):
     def clear_compare(self) -> None:
         self._last_compare_rows = []
         self.compare_model.removeRows(0, self.compare_model.rowCount())
+        self.compare_detail.clear()
         self.lbl_compare_summary.setText("No comparison loaded")
 
     def reset_view(self) -> None:
@@ -57,6 +63,29 @@ class CompareTab(QWidget):
         self.chk_compare_changes_only.blockSignals(True)
         self.chk_compare_changes_only.setChecked(False)
         self.chk_compare_changes_only.blockSignals(False)
+        self.compare_delta_threshold.clear()
+        for combo in (
+            self.compare_filter_test,
+            self.compare_filter_band,
+            self.compare_filter_bw,
+            self.compare_filter_channel,
+            self.compare_filter_screenshot,
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+        self.compare_filter_test.addItem("ALL")
+        self.compare_filter_band.addItem("ALL")
+        self.compare_filter_bw.addItem("ALL")
+        self.compare_filter_channel.addItem("ALL")
+        self.compare_filter_screenshot.addItems(["ALL", "YES", "NO"])
+        for combo in (
+            self.compare_filter_test,
+            self.compare_filter_band,
+            self.compare_filter_bw,
+            self.compare_filter_channel,
+            self.compare_filter_screenshot,
+        ):
+            combo.blockSignals(False)
         self.clear_compare()
         self._set_busy(False)
 
@@ -81,6 +110,39 @@ class CompareTab(QWidget):
         top.addWidget(self.btn_load_compare)
         layout.addLayout(top)
 
+        filters = QHBoxLayout()
+        self.compare_filter_test = QComboBox()
+        self.compare_filter_test.addItem("ALL")
+        self.compare_filter_band = QComboBox()
+        self.compare_filter_band.addItem("ALL")
+        self.compare_filter_bw = QComboBox()
+        self.compare_filter_bw.addItem("ALL")
+        self.compare_filter_channel = QComboBox()
+        self.compare_filter_channel.addItem("ALL")
+        self.compare_filter_screenshot = QComboBox()
+        self.compare_filter_screenshot.addItems(["ALL", "YES", "NO"])
+        self.compare_delta_threshold = QLineEdit()
+        self.compare_delta_threshold.setPlaceholderText("Delta threshold")
+
+        filters.addWidget(QLabel("Test:"))
+        filters.addWidget(self.compare_filter_test)
+        filters.addSpacing(8)
+        filters.addWidget(QLabel("Band:"))
+        filters.addWidget(self.compare_filter_band)
+        filters.addSpacing(8)
+        filters.addWidget(QLabel("BW:"))
+        filters.addWidget(self.compare_filter_bw)
+        filters.addSpacing(8)
+        filters.addWidget(QLabel("CH:"))
+        filters.addWidget(self.compare_filter_channel)
+        filters.addSpacing(8)
+        filters.addWidget(QLabel("Shot:"))
+        filters.addWidget(self.compare_filter_screenshot)
+        filters.addSpacing(8)
+        filters.addWidget(QLabel("Min Delta:"))
+        filters.addWidget(self.compare_delta_threshold)
+        layout.addLayout(filters)
+
         actions = QHBoxLayout()
         self.btn_export_compare_csv = QPushButton("Export CSV")
         self.btn_export_compare_excel = QPushButton("Export Excel")
@@ -90,11 +152,14 @@ class CompareTab(QWidget):
         actions.addWidget(self.lbl_compare_summary)
         layout.addLayout(actions)
 
+        splitter = QSplitter()
+        splitter.setOrientation(Qt.Vertical)
+
         self.compare_table = QTableView()
         self.compare_model = QStandardItemModel()
+        self.compare_model.setSortRole(Qt.UserRole)
         self.compare_model.setHorizontalHeaderLabels([
-            "Test", "Band", "Std", "CH", "BW",
-            "Run A", "Run B", "Margin A", "Margin B", "Δ Margin", "Changed"
+            "Test", "Band", "BW", "CH", "Voltage Cond", "Voltage (V)", "Run A", "Run B", "Delta", "Unit", "Status A", "Status B",
         ])
         self.compare_table.setModel(self.compare_model)
         self.compare_table.setSelectionBehavior(QTableView.SelectRows)
@@ -102,14 +167,35 @@ class CompareTab(QWidget):
         self.compare_table.horizontalHeader().setStretchLastSection(True)
         self.compare_table.setSortingEnabled(True)
         self.compare_table.setAlternatingRowColors(True)
-        self.compare_table.setStyleSheet("QTableView { alternate-background-color: #141b24; gridline-color: #334155; selection-background-color: #1d4ed8; selection-color: white; }")
-        layout.addWidget(self.compare_table, 1)
+        self.compare_table.setStyleSheet(
+            "QTableView { alternate-background-color: #141b24; gridline-color: #334155; "
+            "selection-background-color: #1d4ed8; selection-color: white; }"
+        )
+        splitter.addWidget(self.compare_table)
+
+        detail_widget = QWidget()
+        detail_layout = QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.addWidget(QLabel("Compare Detail"))
+        self.compare_detail = QTextEdit()
+        self.compare_detail.setReadOnly(True)
+        detail_layout.addWidget(self.compare_detail)
+        splitter.addWidget(detail_widget)
+        splitter.setSizes([700, 250])
+        layout.addWidget(splitter, 1)
 
         self.btn_refresh_compare_runs.clicked.connect(self.on_refresh_compare_runs)
         self.btn_load_compare.clicked.connect(self.on_load_compare)
         self.chk_compare_changes_only.stateChanged.connect(self.on_load_compare)
         self.btn_export_compare_csv.clicked.connect(self.on_export_compare_csv)
         self.btn_export_compare_excel.clicked.connect(self.on_export_compare_excel)
+        self.compare_filter_test.currentIndexChanged.connect(self.on_load_compare)
+        self.compare_filter_band.currentIndexChanged.connect(self.on_load_compare)
+        self.compare_filter_bw.currentIndexChanged.connect(self.on_load_compare)
+        self.compare_filter_channel.currentIndexChanged.connect(self.on_load_compare)
+        self.compare_filter_screenshot.currentIndexChanged.connect(self.on_load_compare)
+        self.compare_delta_threshold.returnPressed.connect(self.on_load_compare)
+        self.compare_table.selectionModel().selectionChanged.connect(self.on_compare_selection_changed)
 
     def _set_busy(self, busy: bool, action: str = "") -> None:
         self._busy_action = action if busy else ""
@@ -157,11 +243,11 @@ class CompareTab(QWidget):
         current = combo.currentData()
         combo.blockSignals(True)
         combo.clear()
-        for r in runs:
-            run_id = r.get("run_id", "")
-            started_at = r.get("started_at", "")
-            status = r.get("status", "")
-            preset_name = r.get("preset_name", "") or r.get("preset_id", "")
+        for row in runs:
+            run_id = row.get("run_id", "")
+            started_at = row.get("started_at", "")
+            status = row.get("status", "")
+            preset_name = row.get("preset_name", "") or row.get("preset_id", "")
             combo.addItem(f"{started_at} | {status} | {preset_name}", run_id)
 
         if current:
@@ -186,64 +272,171 @@ class CompareTab(QWidget):
         if self.compare_run_b.count() > 1 and self.compare_run_b.currentIndex() == 0:
             self.compare_run_b.setCurrentIndex(1)
 
+    def _refresh_compare_filter_options(self, rows: List[Dict]) -> None:
+        current_test = self.compare_filter_test.currentText()
+        current_band = self.compare_filter_band.currentText()
+        current_bw = self.compare_filter_bw.currentText()
+        current_channel = self.compare_filter_channel.currentText()
+
+        tests = sorted({str(r.get("test_type", "")).strip() for r in rows if r.get("test_type")})
+        bands = sorted({str(r.get("band", "")).strip() for r in rows if r.get("band")})
+        bws = sorted({int(r.get("bw_mhz")) for r in rows if str(r.get("bw_mhz", "")).strip() != ""})
+        channels = sorted({int(r.get("channel")) for r in rows if str(r.get("channel", "")).strip() != ""})
+
+        combos = [self.compare_filter_test, self.compare_filter_band, self.compare_filter_bw, self.compare_filter_channel]
+        for combo in combos:
+            combo.blockSignals(True)
+
+        self.compare_filter_test.clear()
+        self.compare_filter_test.addItem("ALL")
+        for value in tests:
+            self.compare_filter_test.addItem(value)
+
+        self.compare_filter_band.clear()
+        self.compare_filter_band.addItem("ALL")
+        for value in bands:
+            self.compare_filter_band.addItem(value)
+
+        self.compare_filter_bw.clear()
+        self.compare_filter_bw.addItem("ALL")
+        for value in bws:
+            self.compare_filter_bw.addItem(str(value))
+
+        self.compare_filter_channel.clear()
+        self.compare_filter_channel.addItem("ALL")
+        for value in channels:
+            self.compare_filter_channel.addItem(str(value))
+
+        idx = self.compare_filter_test.findText(current_test)
+        self.compare_filter_test.setCurrentIndex(idx if idx >= 0 else 0)
+        idx = self.compare_filter_band.findText(current_band)
+        self.compare_filter_band.setCurrentIndex(idx if idx >= 0 else 0)
+        idx = self.compare_filter_bw.findText(current_bw)
+        self.compare_filter_bw.setCurrentIndex(idx if idx >= 0 else 0)
+        idx = self.compare_filter_channel.findText(current_channel)
+        self.compare_filter_channel.setCurrentIndex(idx if idx >= 0 else 0)
+
+        for combo in combos:
+            combo.blockSignals(False)
+
+    def _apply_compare_filters(self, rows: List[Dict]) -> List[Dict]:
+        filtered = []
+        test_filter = self.compare_filter_test.currentText()
+        band_filter = self.compare_filter_band.currentText()
+        bw_filter = self.compare_filter_bw.currentText()
+        channel_filter = self.compare_filter_channel.currentText()
+        screenshot_filter = self.compare_filter_screenshot.currentText()
+        threshold_text = self.compare_delta_threshold.text().strip()
+        threshold = None
+        if threshold_text:
+            try:
+                threshold = abs(float(threshold_text))
+            except Exception:
+                threshold = None
+
+        for row in rows:
+            if test_filter != "ALL" and str(row.get("test_type", "")) != test_filter:
+                continue
+            if band_filter != "ALL" and str(row.get("band", "")) != band_filter:
+                continue
+            if bw_filter != "ALL" and str(row.get("bw_mhz", "")) != bw_filter:
+                continue
+            if channel_filter != "ALL" and str(row.get("channel", "")) != channel_filter:
+                continue
+
+            has_screenshot = bool(row.get("has_screenshot_a") or row.get("has_screenshot_b"))
+            if screenshot_filter == "YES" and not has_screenshot:
+                continue
+            if screenshot_filter == "NO" and has_screenshot:
+                continue
+
+            if threshold is not None:
+                try:
+                    if abs(float(row.get("delta_value", ""))) < threshold:
+                        continue
+                except Exception:
+                    continue
+            filtered.append(row)
+        return filtered
+
     def _render_compare_rows(self, rows: List[Dict]) -> None:
-        headers = ["Test", "Band", "Std", "CH", "BW", "Run A", "Run B", "Margin A", "Margin B", "Δ Margin", "Changed"]
+        headers = ["Test", "Band", "BW", "CH", "Voltage Cond", "Voltage (V)", "Run A", "Run B", "Delta", "Unit", "Status A", "Status B"]
         self.compare_model.clear()
         self.compare_model.setHorizontalHeaderLabels(headers)
 
         for row in rows:
-            items = [
-                QStandardItem(str(row.get("test_type", ""))),
-                QStandardItem(str(row.get("band", ""))),
-                QStandardItem(str(row.get("standard", ""))),
-                QStandardItem(str(row.get("channel", ""))),
-                QStandardItem(str(row.get("bw_mhz", ""))),
-                QStandardItem(str(row.get("status_a", ""))),
-                QStandardItem(str(row.get("status_b", ""))),
-                QStandardItem(str(row.get("margin_a", ""))),
-                QStandardItem(str(row.get("margin_b", ""))),
-                QStandardItem(str(row.get("delta_margin", ""))),
-                QStandardItem("Y" if row.get("changed") else ""),
+            delta_text = format_difference_value(row.get("delta_value"))
+            voltage_text = self._format_compare_voltage(row)
+            display_values = [
+                str(row.get("test_type", "")),
+                str(row.get("band", "")),
+                str(row.get("bw_mhz", "")),
+                str(row.get("channel", "")),
+                str(row.get("voltage_condition", "")),
+                voltage_text,
+                format_numeric_value(row.get("measured_a")),
+                format_numeric_value(row.get("measured_b")),
+                delta_text,
+                str(row.get("unit", "")),
+                str(row.get("status_a", "")),
+                str(row.get("status_b", "")),
             ]
+            sort_values = [
+                str(row.get("test_type", "")),
+                str(row.get("band", "")),
+                self._as_sortable_number(row.get("bw_mhz")),
+                self._as_sortable_number(row.get("channel")),
+                str(row.get("voltage_condition", "")),
+                self._as_sortable_number(row.get("target_voltage_v_a", row.get("target_voltage_v_b"))),
+                self._as_sortable_number(row.get("measured_a")),
+                self._as_sortable_number(row.get("measured_b")),
+                self._as_sortable_number(row.get("delta_value")),
+                str(row.get("unit", "")),
+                str(row.get("status_a", "")),
+                str(row.get("status_b", "")),
+            ]
+            items = []
+            for idx, text in enumerate(display_values):
+                item = QStandardItem(text)
+                item.setData(sort_values[idx], Qt.UserRole)
+                if idx in (2, 3, 5, 6, 7, 8, 9):
+                    item.setTextAlignment(Qt.AlignCenter)
+                items.append(item)
 
             status_a = str(row.get("status_a", ""))
             status_b = str(row.get("status_b", ""))
-            delta = row.get("delta_margin", "")
+            delta = row.get("delta_value", "")
             changed = bool(row.get("changed"))
 
             row_color = None
             text_color = None
-            status_font = QFont()
+            font = QFont()
             if status_a == "PASS" and status_b == "FAIL":
-                row_color = QColor(123, 31, 31)      # deeper muted red
+                row_color = QColor(123, 31, 31)
                 text_color = QColor(255, 245, 245)
-                status_font.setBold(True)
+                font.setBold(True)
             elif status_a == "FAIL" and status_b == "PASS":
-                row_color = QColor(27, 94, 32)       # deeper muted green
+                row_color = QColor(27, 94, 32)
                 text_color = QColor(245, 255, 245)
-                status_font.setBold(True)
-            elif "MISSING" in (status_a, status_b):
-                row_color = QColor(55, 65, 81)       # slate gray
-                text_color = QColor(248, 250, 252)
+                font.setBold(True)
             elif changed:
                 try:
-                    if abs(float(delta)) >= 3:
-                        row_color = QColor(120, 53, 15)   # strong amber/brown
+                    if abs(float(delta)) > 0:
+                        row_color = QColor(120, 53, 15)
                         text_color = QColor(255, 251, 235)
                     else:
-                        row_color = QColor(92, 25, 27)    # muted rose for subtle change
-                        text_color = QColor(255, 241, 242)
+                        row_color = QColor(55, 65, 81)
+                        text_color = QColor(248, 250, 252)
                 except Exception:
-                    row_color = QColor(92, 25, 27)
-                    text_color = QColor(255, 241, 242)
+                    row_color = QColor(55, 65, 81)
+                    text_color = QColor(248, 250, 252)
 
             if row_color is not None:
-                for idx, item in enumerate(items):
+                for item in items:
                     item.setBackground(row_color)
                     if text_color is not None:
                         item.setForeground(QBrush(text_color))
-                    if idx in (5, 6, 9, 10):
-                        item.setFont(status_font)
+                    item.setFont(font)
 
             self.compare_model.appendRow(items)
 
@@ -288,9 +481,15 @@ class CompareTab(QWidget):
                 return
             rows = list(payload.get("rows") or [])
             self._last_compare_rows = rows
-            changed_count = sum(1 for r in rows if r.get("changed"))
-            self.lbl_compare_summary.setText(f"Rows {len(rows)} | Changed {changed_count}")
-            self._render_compare_rows(rows)
+            self._refresh_compare_filter_options(rows)
+            filtered = self._apply_compare_filters(rows)
+            changed_count = sum(1 for r in filtered if r.get("changed"))
+            self.lbl_compare_summary.setText(f"Rows {len(filtered)} | Changed {changed_count}")
+            self._render_compare_rows(filtered)
+            if filtered:
+                self.compare_table.selectRow(0)
+            else:
+                self.compare_detail.clear()
 
         self._start_task(
             action="load_compare",
@@ -299,10 +498,60 @@ class CompareTab(QWidget):
             error_title="Compare Failed",
         )
 
+    def on_compare_selection_changed(self, selected, deselected):
+        sel = self.compare_table.selectionModel().selectedRows()
+        if not sel:
+            self.compare_detail.clear()
+            return
+        row = self._filtered_compare_row(sel[0].row())
+        if not row:
+            self.compare_detail.clear()
+            return
+        self.compare_detail.setPlainText(self._build_compare_detail_text(row))
+
+    def _filtered_compare_row(self, row_index: int) -> Dict | None:
+        rows = self._apply_compare_filters(self._last_compare_rows)
+        if 0 <= row_index < len(rows):
+            return rows[row_index]
+        return None
+
+    def _build_compare_detail_text(self, row: Dict) -> str:
+        lines = [
+            f"Test: {row.get('test_type', '')}",
+            f"Band/BW/CH: {row.get('band', '')} / {row.get('bw_mhz', '')} / {row.get('channel', '')}",
+            f"Run A Measured: {format_numeric_value(row.get('measured_a'))}",
+            f"Run B Measured: {format_numeric_value(row.get('measured_b'))}",
+            f"Delta: {format_difference_value(row.get('delta_value'))}",
+            f"Unit: {row.get('unit', '')}",
+            f"Status A/B: {row.get('status_a', '')} / {row.get('status_b', '')}",
+            f"Voltage Condition: {row.get('voltage_condition', '')}",
+            f"Nominal Voltage A/B: {row.get('nominal_voltage_v_a', '')} / {row.get('nominal_voltage_v_b', '')}",
+            f"Target Voltage A/B: {row.get('target_voltage_v_a', '')} / {row.get('target_voltage_v_b', '')}",
+            f"Difference A: {format_difference(row.get('difference_a'), row.get('difference_unit', ''))}",
+            f"Difference B: {format_difference(row.get('difference_b'), row.get('difference_unit', ''))}",
+            f"Limit A/B: {row.get('limit_a', '')} / {row.get('limit_b', '')}",
+            f"Comparator A/B: {row.get('comparator_a', '')} / {row.get('comparator_b', '')}",
+            f"Screenshot A: {row.get('screenshot_path_a', '') or row.get('screenshot_abs_path_a', '') or '(none)'}",
+            f"Screenshot B: {row.get('screenshot_path_b', '') or row.get('screenshot_abs_path_b', '') or '(none)'}",
+        ]
+        return "\n".join(lines)
+
     def _fetch_compare_rows_for_export(self) -> List[Dict]:
         if not self._last_compare_rows:
             raise ValueError("No compare rows loaded")
-        return list(self._last_compare_rows)
+        return self._apply_compare_filters(list(self._last_compare_rows))
+
+    def _build_compare_export_row(self, row: Dict) -> Dict:
+        export_row = dict(row or {})
+        export_row["measured_a"] = format_numeric_value(export_row.get("measured_a"))
+        export_row["measured_b"] = format_numeric_value(export_row.get("measured_b"))
+        export_row["target_voltage_v_display"] = self._format_compare_voltage(export_row)
+        export_row["delta_display"] = format_difference_value(export_row.get("delta_value"))
+        export_row["difference_a_display"] = format_difference(export_row.get("difference_a"), export_row.get("difference_unit", ""))
+        export_row["difference_b_display"] = format_difference(export_row.get("difference_b"), export_row.get("difference_unit", ""))
+        export_row["screenshot_a"] = "Yes" if export_row.get("has_screenshot_a") else ""
+        export_row["screenshot_b"] = "Yes" if export_row.get("has_screenshot_b") else ""
+        return export_row
 
     def on_export_compare_csv(self):
         try:
@@ -318,22 +567,33 @@ class CompareTab(QWidget):
         cols = [
             ("test_type", "Test"),
             ("band", "Band"),
-            ("standard", "Standard"),
-            ("channel", "CH"),
             ("bw_mhz", "BW(MHz)"),
-            ("status_a", "Run A Status"),
-            ("status_b", "Run B Status"),
-            ("margin_a", "Margin A"),
-            ("margin_b", "Margin B"),
-            ("delta_margin", "Delta Margin"),
-            ("changed", "Changed"),
+            ("channel", "CH"),
+            ("voltage_condition", "Voltage Cond"),
+            ("target_voltage_v_display", "Voltage (V)"),
+            ("measured_a", "Run A"),
+            ("measured_b", "Run B"),
+            ("delta_display", "Delta"),
+            ("unit", "Unit"),
+            ("status_a", "Status A"),
+            ("status_b", "Status B"),
+            ("difference_a_display", "Difference A"),
+            ("difference_b_display", "Difference B"),
+            ("limit_a", "Limit A"),
+            ("limit_b", "Limit B"),
+            ("comparator_a", "Comparator A"),
+            ("comparator_b", "Comparator B"),
+            ("screenshot_a", "Screenshot A"),
+            ("screenshot_b", "Screenshot B"),
         ]
+
         def _task():
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                w = csv.writer(f)
-                w.writerow([h for _, h in cols])
-                for r in rows:
-                    w.writerow([r.get(k, "") for k, _ in cols])
+                writer = csv.writer(f)
+                writer.writerow([header for _, header in cols])
+                for row in rows:
+                    export_row = self._build_compare_export_row(row)
+                    writer.writerow([export_row.get(key, "") for key, _ in cols])
             return {"path": path}
 
         def _done(payload: Dict) -> None:
@@ -360,21 +620,29 @@ class CompareTab(QWidget):
         cols = [
             ("test_type", "Test"),
             ("band", "Band"),
-            ("standard", "Standard"),
-            ("channel", "CH"),
             ("bw_mhz", "BW(MHz)"),
-            ("status_a", "Run A Status"),
-            ("status_b", "Run B Status"),
-            ("margin_a", "Margin A"),
-            ("margin_b", "Margin B"),
-            ("delta_margin", "Delta Margin"),
-            ("changed", "Changed"),
+            ("channel", "CH"),
+            ("voltage_condition", "Voltage Cond"),
+            ("target_voltage_v_display", "Voltage (V)"),
+            ("measured_a", "Run A"),
+            ("measured_b", "Run B"),
+            ("delta_display", "Delta"),
+            ("unit", "Unit"),
+            ("status_a", "Status A"),
+            ("status_b", "Status B"),
+            ("difference_a_display", "Difference A"),
+            ("difference_b_display", "Difference B"),
+            ("limit_a", "Limit A"),
+            ("limit_b", "Limit B"),
+            ("comparator_a", "Comparator A"),
+            ("comparator_b", "Comparator B"),
+            ("screenshot_a", "Screenshot A"),
+            ("screenshot_b", "Screenshot B"),
         ]
 
         red_fill = PatternFill(fill_type="solid", fgColor="7B1F1F")
         green_fill = PatternFill(fill_type="solid", fgColor="1B5E20")
         amber_fill = PatternFill(fill_type="solid", fgColor="78350F")
-        yellow_fill = PatternFill(fill_type="solid", fgColor="5C191B")
         gray_fill = PatternFill(fill_type="solid", fgColor="374151")
         header_font = Font(bold=True)
         light_font = Font(color="FFFFFF")
@@ -384,43 +652,36 @@ class CompareTab(QWidget):
             ws = wb.active
             ws.title = "Compare"
 
-            for c, (_, header) in enumerate(cols, start=1):
-                cell = ws.cell(row=1, column=c, value=header)
+            for col_index, (_, header) in enumerate(cols, start=1):
+                cell = ws.cell(row=1, column=col_index, value=header)
                 cell.font = header_font
                 cell.alignment = Alignment(vertical="center")
 
-            for r_i, r in enumerate(rows, start=2):
-                for c_i, (k, _) in enumerate(cols, start=1):
-                    value = "Y" if (k == "changed" and r.get("changed")) else r.get(k, "")
-                    ws.cell(row=r_i, column=c_i, value=value)
-
-                status_a = str(r.get("status_a", ""))
-                status_b = str(r.get("status_b", ""))
-                delta = r.get("delta_margin", "")
-                changed = bool(r.get("changed"))
+            for row_index, row in enumerate(rows, start=2):
+                export_row = self._build_compare_export_row(row)
+                for col_index, (key, _) in enumerate(cols, start=1):
+                    ws.cell(row=row_index, column=col_index, value=export_row.get(key, ""))
 
                 fill = None
+                status_a = str(export_row.get("status_a", ""))
+                status_b = str(export_row.get("status_b", ""))
                 if status_a == "PASS" and status_b == "FAIL":
                     fill = red_fill
                 elif status_a == "FAIL" and status_b == "PASS":
                     fill = green_fill
+                elif export_row.get("changed"):
+                    fill = amber_fill
                 elif "MISSING" in (status_a, status_b):
                     fill = gray_fill
-                elif changed:
-                    try:
-                        fill = amber_fill if abs(float(delta)) >= 3 else yellow_fill
-                    except Exception:
-                        fill = yellow_fill
 
                 if fill is not None:
-                    for c_i in range(1, len(cols) + 1):
-                        ws.cell(row=r_i, column=c_i).fill = fill
-                        ws.cell(row=r_i, column=c_i).font = light_font
+                    for col_index in range(1, len(cols) + 1):
+                        ws.cell(row=row_index, column=col_index).fill = fill
+                        ws.cell(row=row_index, column=col_index).font = light_font
 
-            widths = [18, 10, 14, 10, 10, 14, 14, 12, 12, 14, 10]
-            for c_i, width in enumerate(widths, start=1):
-                ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = width
-
+            widths = [12, 10, 10, 8, 16, 12, 14, 14, 16, 12, 12, 12, 16, 16, 12, 12, 14, 14, 12, 12]
+            for col_index, width in enumerate(widths, start=1):
+                ws.column_dimensions[ws.cell(row=1, column=col_index).column_letter].width = width
             wb.save(path)
             return {"path": path}
 
@@ -433,3 +694,22 @@ class CompareTab(QWidget):
             on_success=_done,
             error_title="Export Compare Excel Failed",
         )
+
+    def _as_sortable_number(self, value) -> float:
+        try:
+            if value in (None, ""):
+                return float("-inf")
+            return float(value)
+        except Exception:
+            return float("-inf")
+
+    def _format_compare_voltage(self, row: Dict) -> str:
+        preferred = row.get("target_voltage_v_a")
+        fallback = row.get("target_voltage_v_b")
+        value = preferred if preferred not in (None, "") else fallback
+        try:
+            if value in (None, ""):
+                return ""
+            return f"{float(value):g}"
+        except Exception:
+            return str(value or "")

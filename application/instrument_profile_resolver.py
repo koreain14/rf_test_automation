@@ -23,7 +23,8 @@ class InstrumentProfileResolver:
 
     DEFAULTS: Dict[str, Dict[str, Any]] = {
         "PSD_DEFAULT": {
-            "span_hz": 100_000_000,
+            "span_mode": "BW_X2",
+            "span_min_hz": 20_000_000,
             "rbw_hz": 100_000,
             "vbw_hz": 300_000,
             "ref_level_dbm": 20,
@@ -31,7 +32,8 @@ class InstrumentProfileResolver:
             "detector": "RMS",
         },
         "OBW_DEFAULT": {
-            "span_hz": 100_000_000,
+            "span_mode": "BW_X2",
+            "span_min_hz": 50_000_000,
             "rbw_hz": 100_000,
             "vbw_hz": 300_000,
             "ref_level_dbm": 20,
@@ -193,6 +195,10 @@ class InstrumentProfileResolver:
     def _filter_loader_result(self, resolved: Dict[str, Any]) -> Dict[str, Any]:
         allowed = {
             "span_hz",
+            "span_mhz",
+            "span_mode",
+            "span_multiplier",
+            "span_min_hz",
             "rbw_hz",
             "vbw_hz",
             "ref_level_dbm",

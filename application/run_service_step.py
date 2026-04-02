@@ -185,6 +185,19 @@ class RunServiceStep:
                     log.info("run aborted | run=%s", run_id)
                     return "ABORTED"
 
+                tags = dict(getattr(case, "tags", {}) or {})
+                current_case_info = {
+                    "channel": case.channel,
+                    "test_type": case.test_type,
+                    "standard": case.standard,
+                    "case_key": case.key,
+                    "voltage_condition": tags.get("voltage_condition", ""),
+                    "target_voltage_v": tags.get("target_voltage_v"),
+                    "nominal_voltage_v": tags.get("nominal_voltage_v"),
+                }
+                if on_progress:
+                    on_progress(count, "RUNNING", current_case_info)
+
                 accepted = self.case_pipeline.handle_reconfigure_prompt(
                     run_id=run_id,
                     dut_control_mode=environment.dut_control_mode,
@@ -204,11 +217,14 @@ class RunServiceStep:
                     case=case,
                     ruleset=ruleset,
                     inst=environment.instrument,
+                    session=environment.session,
+                    power_control=environment.power_control,
+                    equipment_profile_name=equipment_profile_name,
                 )
 
                 count += 1
                 if on_progress:
-                    on_progress(count, verdict, {"channel": case.channel, "test_type": case.test_type, "standard": case.standard, "case_key": case.key})
+                    on_progress(count, verdict, current_case_info)
                 previous_case = case
 
             return "DONE"

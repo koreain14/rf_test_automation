@@ -47,11 +47,17 @@ class ComputeMetricsStep:
 
             limit = -30.0 if test_type == "PSD" else -20.0
             ctx.values["limit_value"] = limit
+            ctx.values["difference_value"] = measured - limit
+            ctx.values["difference_unit"] = str(ctx.values.get("measurement_unit", "") or "")
+            ctx.values["comparator"] = "upper_limit"
             ctx.values["margin_db"] = limit - measured
 
             return StepResult(step_name=self.name, status="OK", data={
                 "measured_value": measured,
                 "limit_value": limit,
+                "difference_value": ctx.values["difference_value"],
+                "difference_unit": ctx.values["difference_unit"],
+                "comparator": ctx.values["comparator"],
                 "margin_db": ctx.values["margin_db"],
             })
         except Exception as e:

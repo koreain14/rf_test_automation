@@ -81,6 +81,9 @@ class AnalyzerMonitorService:
         }
 
         try:
+            if hasattr(instrument, "write"):
+                self._safe_write(instrument, ":CONF:SAN")
+
             if hasattr(instrument, "configure"):
                 instrument.configure(settings)
 

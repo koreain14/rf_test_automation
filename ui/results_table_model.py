@@ -1,12 +1,28 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+
+from typing import Any, Dict, List
+
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor, QBrush, QFont
 
+from application.result_difference import format_difference, format_difference_value, format_numeric_value
+
 
 class ResultsTableModel(QAbstractTableModel):
-    HEADERS = ["Status", "Test", "Band", "Std", "Group", "Ch", "BW",
-           "Margin(dB)", "Measured", "Limit", "Reason", "Key"]
+    HEADERS = [
+        "Status",
+        "Test",
+        "Band",
+        "BW",
+        "CH",
+        "Voltage Cond",
+        "Voltage (V)",
+        "Measured",
+        "Limit",
+        "Difference",
+        "Unit",
+        "Screenshot",
+    ]
 
     def __init__(self):
         super().__init__()
@@ -34,110 +50,167 @@ class ResultsTableModel(QAbstractTableModel):
         if not index.isValid():
             return None
 
-        r = self._rows[index.row()]
+        row = self._rows[index.row()]
         col = index.column()
 
-        # -----------------------------
-        # Text display
-        # -----------------------------
         if role == Qt.DisplayRole:
             if col == 0:
-                return r.get("status", "")
+                return row.get("status", "")
             if col == 1:
-                return r.get("test_type", "")
+                return row.get("test_type", "")
             if col == 2:
-                return r.get("band", "")
+                return row.get("band", "")
             if col == 3:
-                return r.get("standard", "")
+                return str(row.get("bw_mhz", ""))
             if col == 4:
-                return r.get("group", "")
+                return str(row.get("channel", ""))
             if col == 5:
-                return str(r.get("channel", ""))
+                return row.get("voltage_condition", "")
             if col == 6:
-                return str(r.get("bw_mhz", ""))
+                return self._format_voltage(row.get("target_voltage_v"))
             if col == 7:
-                m = r.get("margin_db")
-                return "" if m is None else f"{m:.2f}"
+                value = row.get("measured_value")
+                return format_numeric_value(value)
             if col == 8:
-                v = r.get("measured_value")
-                return "" if v is None else str(v)
+                value = row.get("limit_value")
+                return format_numeric_value(value)
             if col == 9:
-                v = r.get("limit_value")
-                return "" if v is None else str(v)
+                return format_difference_value(row.get("difference_value"))
             if col == 10:
-                return r.get("reason", "")
+                return row.get("measurement_unit", "") or row.get("difference_unit", "")
             if col == 11:
-                return r.get("test_key", "") or r.get("case_key", "")
+                return "Yes" if row.get("has_screenshot") else ""
 
-        # -----------------------------
-        # Row highlight by status
-        # -----------------------------
-        if role == Qt.BackgroundRole:
-            st = (r.get("status") or "").upper()
-
-            if st == "FAIL":
-                return QBrush(QColor("#7B1F1F"))   # deep red
-            if st == "ERROR":
-                return QBrush(QColor("#4A0D0D"))   # darker red
-            if st == "SKIP":
-                return QBrush(QColor("#78350F"))   # amber/brown
-            return None
-
-        # -----------------------------
-        # Foreground / text color
-        # -----------------------------
-        if role == Qt.ForegroundRole:
-            st = (r.get("status") or "").upper()
-
-            if st in ("FAIL", "ERROR", "SKIP"):
-                return QBrush(QColor("#F8FAFC"))   # high-contrast light text
-
+        if role == Qt.UserRole:
+            if col == 0:
+                return str(row.get("status", ""))
+            if col == 1:
+                return str(row.get("test_type", ""))
+            if col == 2:
+                return str(row.get("band", ""))
+            if col == 3:
+                return self._as_sortable_number(row.get("bw_mhz"))
+            if col == 4:
+                return self._as_sortable_number(row.get("channel"))
+            if col == 5:
+                return str(row.get("voltage_condition", ""))
+            if col == 6:
+                return self._as_sortable_number(row.get("target_voltage_v"))
             if col == 7:
-                m = r.get("margin_db")
-                if m is not None:
-                    try:
-                        mv = float(m)
-                        if mv < 0:
-                            return QBrush(QColor("#FCA5A5"))
-                        elif mv < 3:
-                            return QBrush(QColor("#FDE68A"))
-                    except Exception:
-                        pass
+                return self._as_sortable_number(row.get("measured_value"))
+            if col == 8:
+                return self._as_sortable_number(row.get("limit_value"))
+            if col == 9:
+                return self._as_sortable_number(row.get("difference_value"))
+            if col == 10:
+                return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+            if col == 11:
+                return 1 if row.get("has_screenshot") else 0
 
+        if role == Qt.BackgroundRole:
+            status = str(row.get("status", "")).upper()
+            if status == "FAIL":
+                return QBrush(QColor("#7B1F1F"))
+            if status == "ERROR":
+                return QBrush(QColor("#4A0D0D"))
+            if status == "SKIP":
+                return QBrush(QColor("#78350F"))
             return None
 
-        # -----------------------------
-        # Font emphasis
-        # -----------------------------
+        if role == Qt.ForegroundRole:
+            status = str(row.get("status", "")).upper()
+            if status in ("FAIL", "ERROR", "SKIP"):
+                return QBrush(QColor("#F8FAFC"))
+
+            if col == 9:
+                value = row.get("difference_value")
+                try:
+                    numeric = float(value)
+                    if numeric > 0:
+                        return QBrush(QColor("#FCA5A5"))
+                    if numeric > -3:
+                        return QBrush(QColor("#FDE68A"))
+                except Exception:
+                    pass
+            return None
+
         if role == Qt.FontRole:
             font = QFont()
-            st = (r.get("status") or "").upper()
+            status = str(row.get("status", "")).upper()
             if col == 0:
                 font.setBold(True)
                 return font
-            if st in ("FAIL", "ERROR") and col in (0, 7, 10):
+            if status in ("FAIL", "ERROR") and col in (0, 9, 11):
                 font.setBold(True)
                 return font
-             
-        # -----------------------------
-        # Alignment
-        # -----------------------------
+
         if role == Qt.TextAlignmentRole:
-            if col in (5, 6, 7, 8, 9):
+            if col in (3, 4, 5, 6, 7, 8, 9, 10, 11):
                 return Qt.AlignCenter
 
-        # -----------------------------
-        # Tooltip (reason 긴 경우 보기 좋음)
-        # -----------------------------
         if role == Qt.ToolTipRole:
-            if col == 10:
-                return r.get("reason", "")
+            if col == 9:
+                return format_difference(row.get("difference_value"), row.get("difference_unit", ""))
             if col == 11:
-                return r.get("test_key", "") or r.get("case_key", "")
+                return row.get("screenshot_path", "") or row.get("screenshot_abs_path", "")
+            details = [
+                f"Key: {row.get('test_key', '')}",
+                f"Reason: {row.get('reason', '')}",
+            ]
+            return "\n".join(part for part in details if part.strip())
 
         return None
-        
+
     def get_row(self, row: int):
         if 0 <= row < len(self._rows):
             return self._rows[row]
         return None
+
+    def sort(self, column: int, order: Qt.SortOrder = Qt.AscendingOrder) -> None:
+        reverse = order == Qt.DescendingOrder
+        self.layoutAboutToBeChanged.emit()
+        self._rows.sort(key=lambda row: self._sort_key(row, column), reverse=reverse)
+        self.layoutChanged.emit()
+
+    def _sort_key(self, row: Dict[str, Any], column: int):
+        if column == 0:
+            return str(row.get("status", ""))
+        if column == 1:
+            return str(row.get("test_type", ""))
+        if column == 2:
+            return str(row.get("band", ""))
+        if column == 3:
+            return self._as_sortable_number(row.get("bw_mhz"))
+        if column == 4:
+            return self._as_sortable_number(row.get("channel"))
+        if column == 5:
+            return str(row.get("voltage_condition", ""))
+        if column == 6:
+            return self._as_sortable_number(row.get("target_voltage_v"))
+        if column == 7:
+            return self._as_sortable_number(row.get("measured_value"))
+        if column == 8:
+            return self._as_sortable_number(row.get("limit_value"))
+        if column == 9:
+            return self._as_sortable_number(row.get("difference_value"))
+        if column == 10:
+            return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+        if column == 11:
+            return 1 if row.get("has_screenshot") else 0
+        return ""
+
+    def _as_sortable_number(self, value: Any) -> float:
+        try:
+            if value in (None, ""):
+                return float("-inf")
+            return float(value)
+        except Exception:
+            return float("-inf")
+
+    def _format_voltage(self, value: Any) -> str:
+        try:
+            if value in (None, ""):
+                return ""
+            return f"{float(value):g}"
+        except Exception:
+            return str(value or "")

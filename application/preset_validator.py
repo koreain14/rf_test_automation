@@ -96,6 +96,16 @@ class PresetValidator:
                 f"Unsupported PSD result unit: {sel.psd_result_unit}. Allowed: {sorted(PSD_ALLOWED_UNITS)}"
             )
 
+        nominal_voltage_v = getattr(sel, "nominal_voltage_v", None)
+        if nominal_voltage_v not in (None, ""):
+            try:
+                if float(nominal_voltage_v) <= 0:
+                    result.add_error("Nominal voltage must be greater than 0 V.")
+            except Exception:
+                result.add_error("Nominal voltage must be a valid number.")
+        if "KC" in str(model.ruleset_id or "").upper() and nominal_voltage_v in (None, ""):
+            result.add_warning("KC preset is missing nominal voltage. Voltage condition axis will be skipped.")
+
         if _looks_like_wlan(model):
             self._wlan_validator.validate(model, result)
 

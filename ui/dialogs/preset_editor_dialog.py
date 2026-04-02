@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -161,6 +162,7 @@ class PresetEditorDialog(QDialog):
         _connect(self.cb_plan_mode.currentTextChanged)
         _connect(self.cb_measurement_profile.currentTextChanged)
         _connect(self.cb_psd_result_unit.currentTextChanged)
+        _connect(self.sp_nominal_voltage.valueChanged)
         _connect(self.ed_device_class.textChanged)
         _connect(self.ed_profiles_json.textChanged)
         _connect(self.cb_exec_type.currentTextChanged)
@@ -207,6 +209,12 @@ class PresetEditorDialog(QDialog):
         self.cb_psd_result_unit.addItem("dBm/MHz", PSD_UNIT_DBM_PER_MHZ)
         self.lb_psd_result_unit_hint = QLabel("")
         self.lb_psd_result_unit_hint.setWordWrap(True)
+        self.sp_nominal_voltage = QDoubleSpinBox()
+        self.sp_nominal_voltage.setRange(0.0, 1000.0)
+        self.sp_nominal_voltage.setDecimals(3)
+        self.sp_nominal_voltage.setSingleStep(0.1)
+        self.sp_nominal_voltage.setSuffix(" V")
+        self.sp_nominal_voltage.setSpecialValueText("(empty)")
         self.ed_device_class = QLineEdit()
         form.addRow("Name", self.ed_name)
         form.addRow("Description", self.ed_description)
@@ -218,6 +226,7 @@ class PresetEditorDialog(QDialog):
         form.addRow("Measurement Profile", self.cb_measurement_profile)
         form.addRow("PSD Result Unit", self.cb_psd_result_unit)
         form.addRow("", self.lb_psd_result_unit_hint)
+        form.addRow("Nominal Voltage", self.sp_nominal_voltage)
         form.addRow("Device Class", self.ed_device_class)
         self._reload_measurement_profile_options()
         self._refresh_psd_result_unit_hint()
@@ -321,6 +330,7 @@ class PresetEditorDialog(QDialog):
                 standard="802.11ax",
                 plan_mode="Quick",
                 measurement_profile_name="",
+                nominal_voltage_v=None,
                 test_types=["PSD", "OBW", "SP", "RX"],
                 execution_policy=ExecutionPolicyModel(type="CHANNEL_CENTRIC", test_order=["PSD", "OBW", "SP", "RX"], include_bw_in_group=True),
                 instrument_profile_by_test={},
@@ -478,6 +488,7 @@ class PresetEditorDialog(QDialog):
             self._reload_measurement_profile_options(sel.measurement_profile_name)
             idx = self.cb_psd_result_unit.findData(sel.psd_result_unit or "")
             self.cb_psd_result_unit.setCurrentIndex(idx if idx >= 0 else 0)
+            self.sp_nominal_voltage.setValue(float(sel.nominal_voltage_v or 0.0))
             self.ed_device_class.setText(sel.device_class)
             self.ed_profiles_json.setPlainText(json.dumps(sel.instrument_profile_by_test, ensure_ascii=False, indent=2))
             self.cb_exec_type.setCurrentText(sel.execution_policy.type)
@@ -527,6 +538,7 @@ class PresetEditorDialog(QDialog):
                 plan_mode=self.cb_plan_mode.currentText().strip() or "DEMO",
                 measurement_profile_name=measurement_profile_name,
                 psd_result_unit=str(self.cb_psd_result_unit.currentData() or "").strip(),
+                nominal_voltage_v=self._selected_nominal_voltage(),
                 test_types=normalize_test_type_list(selected_tests),
                 execution_policy=ExecutionPolicyModel(
                     type=self.cb_exec_type.currentText().strip() or "CHANNEL_CENTRIC",
@@ -642,6 +654,10 @@ class PresetEditorDialog(QDialog):
         if data is not None:
             return normalize_profile_name(data)
         return normalize_profile_name(self.cb_measurement_profile.currentText())
+
+    def _selected_nominal_voltage(self) -> float | None:
+        value = float(self.sp_nominal_voltage.value())
+        return value if value > 0 else None
 
     def _refresh_psd_result_unit_hint(self) -> None:
         band = self.cb_band.currentText().strip()
