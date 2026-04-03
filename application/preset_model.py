@@ -55,6 +55,7 @@ class PresetSelectionModel:
     measurement_profile_name: str = ""
     psd_result_unit: str = ""
     nominal_voltage_v: float | None = None
+    selected_data_rates: list[str] = field(default_factory=list)
     test_types: list[str] = field(default_factory=list)
     bandwidth_mhz: list[int] = field(default_factory=list)
     channels: ChannelSelectionModel = field(default_factory=ChannelSelectionModel)

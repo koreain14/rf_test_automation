@@ -295,6 +295,7 @@ class RunRepositorySQLite:
             r["screenshot_path"] = str(last.get("screenshot_path", "") or "")
             r["screenshot_abs_path"] = str(last.get("screenshot_abs_path", "") or "")
             r["has_screenshot"] = bool(r["screenshot_path"] or r["screenshot_abs_path"])
+            r["data_rate"] = str(last.get("data_rate") or tags.get("data_rate") or "")
             r["voltage_condition"] = str(last.get("voltage_condition") or tags.get("voltage_condition") or "")
             r["nominal_voltage_v"] = (
                 last.get("nominal_voltage_v")

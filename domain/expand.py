@@ -10,9 +10,10 @@ from application.test_type_symbols import (
     normalize_profile_name,
     normalize_test_type_list,
     normalize_test_type_map,
+    normalize_test_type_symbol,
 )
 from .models import InstrumentProfile, Preset, Recipe, RuleSet, TestCase
-from .ruleset_models import BandInfo, ChannelGroup, normalize_voltage_policy
+from .ruleset_models import BandInfo, ChannelGroup, normalize_data_rate_policy, normalize_voltage_policy
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +75,202 @@ def _resolve_voltage_axis(recipe_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     return axes or [{}]
 
 
+def _normalize_rate_list(values: Any) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in (values or []):
+        name = str(item or "").strip().upper()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _normalize_apply_to(values: Any) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in (values or []):
+        name = normalize_test_type_symbol(item)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _resolve_voltage_axis_for_test(recipe_meta: Dict[str, Any], test_type: str) -> List[Dict[str, Any]]:
+    policy = normalize_voltage_policy(recipe_meta.get("voltage_policy") or {})
+    enabled = bool(policy.get("enabled"))
+    nominal_voltage_v = _coerce_float(recipe_meta.get("nominal_voltage_v"))
+    levels = list(policy.get("levels") or [])
+    apply_to = _normalize_apply_to(policy.get("apply_to"))
+    apply_to_defined = bool(policy.get("apply_to_defined"))
+    current_test_type = normalize_test_type_symbol(test_type)
+    applies = (not apply_to_defined) or (current_test_type in apply_to)
+
+    if not enabled:
+        return [
+            {
+                "voltage_policy_enabled": False,
+                "voltage_policy_active": False,
+                "voltage_policy_applied": False,
+                "voltage_policy_status": "disabled",
+                "voltage_policy_apply_to": list(apply_to),
+                "voltage_policy_apply_to_defined": apply_to_defined,
+            }
+        ]
+    if not applies:
+        return [
+            {
+                "voltage_policy_enabled": True,
+                "voltage_policy_active": False,
+                "voltage_policy_applied": False,
+                "voltage_policy_status": "not_applicable_test_type",
+                "voltage_policy_apply_to": list(apply_to),
+                "voltage_policy_apply_to_defined": apply_to_defined,
+            }
+        ]
+    if nominal_voltage_v is None or nominal_voltage_v <= 0:
+        return [
+            {
+                "voltage_policy_enabled": True,
+                "voltage_policy_active": False,
+                "voltage_policy_applied": False,
+                "voltage_policy_status": "disabled_missing_nominal",
+                "voltage_policy_apply_to": list(apply_to),
+                "voltage_policy_apply_to_defined": apply_to_defined,
+            }
+        ]
+    if not levels:
+        return [
+            {
+                "voltage_policy_enabled": True,
+                "voltage_policy_active": False,
+                "voltage_policy_applied": False,
+                "voltage_policy_status": "disabled_no_levels",
+                "voltage_policy_apply_to": list(apply_to),
+                "voltage_policy_apply_to_defined": apply_to_defined,
+            }
+        ]
+
+    axes: List[Dict[str, Any]] = []
+    for axis in _resolve_voltage_axis(recipe_meta):
+        tags = dict(axis or {})
+        tags.update(
+            {
+                "voltage_policy_enabled": True,
+                "voltage_policy_active": True,
+                "voltage_policy_applied": True,
+                "voltage_policy_status": "enabled",
+                "voltage_policy_apply_to": list(apply_to),
+                "voltage_policy_apply_to_defined": apply_to_defined,
+            }
+        )
+        axes.append(tags)
+    return axes or [
+        {
+            "voltage_policy_enabled": True,
+            "voltage_policy_active": False,
+            "voltage_policy_applied": False,
+            "voltage_policy_status": "disabled_no_levels",
+            "voltage_policy_apply_to": list(apply_to),
+            "voltage_policy_apply_to_defined": apply_to_defined,
+        }
+    ]
+
+
+def _data_rate_key_suffix(axis: Dict[str, Any]) -> str:
+    data_rate = str(axis.get("data_rate", "") or "").strip()
+    if not data_rate:
+        return ""
+    return f"|RATE:{data_rate}"
+
+
+def _resolve_data_rate_axis_for_test(
+    recipe_meta: Dict[str, Any],
+    *,
+    standard: str,
+    test_type: str,
+) -> List[Dict[str, Any]]:
+    policy = normalize_data_rate_policy(recipe_meta.get("data_rate_policy") or {})
+    enabled = bool(policy.get("enabled"))
+    apply_to = _normalize_apply_to(policy.get("apply_to"))
+    apply_to_defined = bool(policy.get("apply_to_defined"))
+    current_test_type = normalize_test_type_symbol(test_type)
+    applies = (not apply_to_defined) or (current_test_type in apply_to)
+    by_standard = dict(policy.get("by_standard") or {})
+    selected_data_rates = _normalize_rate_list(recipe_meta.get("selected_data_rates") or [])
+    allowed_rates = _normalize_rate_list(by_standard.get(str(standard or "").strip()) or [])
+
+    if not enabled:
+        return [
+            {
+                "data_rate_policy_enabled": False,
+                "data_rate_policy_active": False,
+                "data_rate_policy_applied": False,
+                "data_rate_policy_status": "disabled",
+                "data_rate_policy_apply_to": list(apply_to),
+                "data_rate_policy_apply_to_defined": apply_to_defined,
+                "data_rate_standard": str(standard or "").strip(),
+            }
+        ]
+    if not applies:
+        return [
+            {
+                "data_rate_policy_enabled": True,
+                "data_rate_policy_active": False,
+                "data_rate_policy_applied": False,
+                "data_rate_policy_status": "not_applicable_test_type",
+                "data_rate_policy_apply_to": list(apply_to),
+                "data_rate_policy_apply_to_defined": apply_to_defined,
+                "data_rate_standard": str(standard or "").strip(),
+            }
+        ]
+    if not allowed_rates:
+        return [
+            {
+                "data_rate_policy_enabled": True,
+                "data_rate_policy_active": False,
+                "data_rate_policy_applied": False,
+                "data_rate_policy_status": "disabled_no_standard_rates",
+                "data_rate_policy_apply_to": list(apply_to),
+                "data_rate_policy_apply_to_defined": apply_to_defined,
+                "data_rate_standard": str(standard or "").strip(),
+            }
+        ]
+
+    effective_rates = [rate for rate in allowed_rates if not selected_data_rates or rate in selected_data_rates]
+    if not effective_rates:
+        return [
+            {
+                "data_rate_policy_enabled": True,
+                "data_rate_policy_active": False,
+                "data_rate_policy_applied": False,
+                "data_rate_policy_status": "disabled_selected_subset_empty",
+                "data_rate_policy_apply_to": list(apply_to),
+                "data_rate_policy_apply_to_defined": apply_to_defined,
+                "data_rate_standard": str(standard or "").strip(),
+                "selected_data_rates": list(selected_data_rates),
+            }
+        ]
+
+    return [
+        {
+            "data_rate_policy_enabled": True,
+            "data_rate_policy_active": True,
+            "data_rate_policy_applied": True,
+            "data_rate_policy_status": "enabled",
+            "data_rate_policy_apply_to": list(apply_to),
+            "data_rate_policy_apply_to_defined": apply_to_defined,
+            "data_rate_standard": str(standard or "").strip(),
+            "selected_data_rates": list(selected_data_rates),
+            "data_rate": rate,
+        }
+        for rate in effective_rates
+    ]
+
+
 def _voltage_key_suffix(axis: Dict[str, Any]) -> str:
     condition = str(axis.get("voltage_condition", "") or "").strip()
     if not condition:
@@ -103,6 +300,9 @@ def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = No
         "voltage_policy_enabled": bool(recipe.meta.get("voltage_policy_enabled")),
         "voltage_policy_active": bool(recipe.meta.get("voltage_policy_active")),
         "voltage_policy_status": recipe.meta.get("voltage_policy_status", ""),
+        "data_rate_policy_enabled": bool(recipe.meta.get("data_rate_policy_enabled")),
+        "data_rate_policy_active": bool(recipe.meta.get("data_rate_policy_active")),
+        "data_rate_policy_status": recipe.meta.get("data_rate_policy_status", ""),
         "nominal_voltage_v": recipe.meta.get("nominal_voltage_v"),
     }
     if extra_tags:
@@ -257,7 +457,9 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     selector_fallback_tests: List[str] = []
     device_class = str(sel.get("device_class", "")).strip()
     nominal_voltage_v = _coerce_float(sel.get("nominal_voltage_v"))
+    selected_data_rates = _normalize_rate_list(sel.get("selected_data_rates") or [])
     voltage_policy = normalize_voltage_policy(getattr(ruleset, "voltage_policy", {}) or {})
+    data_rate_policy = normalize_data_rate_policy(getattr(ruleset, "data_rate_policy", {}) or {})
     voltage_policy_enabled = bool(voltage_policy.get("enabled"))
     voltage_levels = list(voltage_policy.get("levels") or [])
     voltage_policy_active = bool(voltage_policy_enabled and nominal_voltage_v and nominal_voltage_v > 0 and voltage_levels)
@@ -268,6 +470,8 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         voltage_policy_status = "disabled_no_levels"
     elif voltage_policy_enabled and not nominal_voltage_v:
         voltage_policy_status = "disabled_missing_nominal"
+    data_rate_policy_enabled = bool(data_rate_policy.get("enabled"))
+    data_rate_policy_status = "enabled" if data_rate_policy_enabled else "disabled"
     psd_policy = resolve_psd_runtime_policy(
         preset_unit=sel.get("psd_result_unit"),
         band=band,
@@ -309,6 +513,15 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "voltage_policy_enabled": voltage_policy_enabled,
         "voltage_policy_active": voltage_policy_active,
         "voltage_policy_status": voltage_policy_status,
+        "voltage_policy_apply_to": list(voltage_policy.get("apply_to") or []),
+        "voltage_policy_apply_to_defined": bool(voltage_policy.get("apply_to_defined")),
+        "data_rate_policy": data_rate_policy,
+        "data_rate_policy_enabled": data_rate_policy_enabled,
+        "data_rate_policy_active": data_rate_policy_enabled,
+        "data_rate_policy_status": data_rate_policy_status,
+        "data_rate_policy_apply_to": list(data_rate_policy.get("apply_to") or []),
+        "data_rate_policy_apply_to_defined": bool(data_rate_policy.get("apply_to_defined")),
+        "selected_data_rates": list(selected_data_rates),
         "nominal_voltage_v": nominal_voltage_v,
         "psd_result_unit": psd_policy["result_unit"],
         "psd_canonical_unit": PSD_CANONICAL_UNIT,
@@ -337,7 +550,7 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             if normalize_profile_name(profile_name) and normalize_profile_name(profile_name) != shared_profile_name
         )
         log.info(
-            "build_recipe measurement profile selection | preset=%s shared_profile=%s per_test=%s effective=%s selector_fallback_tests=%s conflicts=%s psd_method=%s psd_unit=%s psd_limit=%s %s voltage_policy_enabled=%s voltage_policy_active=%s voltage_policy_status=%s nominal_voltage_v=%s",
+            "build_recipe measurement profile selection | preset=%s shared_profile=%s per_test=%s effective=%s selector_fallback_tests=%s conflicts=%s psd_method=%s psd_unit=%s psd_limit=%s %s voltage_policy_enabled=%s voltage_policy_active=%s voltage_policy_status=%s voltage_policy_apply_to=%s data_rate_policy_enabled=%s data_rate_policy_apply_to=%s selected_data_rates=%s nominal_voltage_v=%s",
             preset.name,
             shared_profile_name,
             dict(ip_map),
@@ -351,11 +564,15 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             voltage_policy_enabled,
             voltage_policy_active,
             voltage_policy_status,
+            list(voltage_policy.get("apply_to") or []),
+            data_rate_policy_enabled,
+            list(data_rate_policy.get("apply_to") or []),
+            list(selected_data_rates),
             nominal_voltage_v,
         )
     else:
         log.info(
-            "build_recipe measurement profile selection | preset=%s shared_profile=(empty) per_test=%s effective=%s psd_method=%s psd_unit=%s psd_limit=%s %s voltage_policy_enabled=%s voltage_policy_active=%s voltage_policy_status=%s nominal_voltage_v=%s",
+            "build_recipe measurement profile selection | preset=%s shared_profile=(empty) per_test=%s effective=%s psd_method=%s psd_unit=%s psd_limit=%s %s voltage_policy_enabled=%s voltage_policy_active=%s voltage_policy_status=%s voltage_policy_apply_to=%s data_rate_policy_enabled=%s data_rate_policy_apply_to=%s selected_data_rates=%s nominal_voltage_v=%s",
             preset.name,
             dict(ip_map),
             dict(effective_profile_map),
@@ -366,6 +583,10 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
             voltage_policy_enabled,
             voltage_policy_active,
             voltage_policy_status,
+            list(voltage_policy.get("apply_to") or []),
+            data_rate_policy_enabled,
+            list(data_rate_policy.get("apply_to") or []),
+            list(selected_data_rates),
             nominal_voltage_v,
         )
 
@@ -401,7 +622,23 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
         return ""
 
     wlan = dict(recipe.meta.get("wlan_expansion") or {})
-    voltage_axes = _resolve_voltage_axis(dict(recipe.meta or {}))
+    recipe_meta = dict(recipe.meta or {})
+    voltage_axes_by_test: Dict[str, List[Dict[str, Any]]] = {}
+    for test in recipe.test_types:
+        axes = _resolve_voltage_axis_for_test(recipe_meta, test)
+        voltage_axes_by_test[test] = axes
+        log.info(
+            "expand_recipe voltage axis decision | ruleset_id=%s test_type=%s enabled=%s active=%s apply_to=%s apply_to_defined=%s applied=%s generated_levels=%s nominal_voltage_v=%s",
+            recipe.meta.get("ruleset_id", ""),
+            test,
+            bool(recipe.meta.get("voltage_policy_enabled")),
+            any(bool(axis.get("voltage_policy_active")) for axis in axes),
+            recipe.meta.get("voltage_policy_apply_to", []),
+            bool(recipe.meta.get("voltage_policy_apply_to_defined")),
+            any(bool(axis.get("voltage_policy_applied")) for axis in axes),
+            [str(axis.get("voltage_condition", "") or "") for axis in axes if axis.get("voltage_condition") not in (None, "")],
+            recipe.meta.get("nominal_voltage_v"),
+        )
     mode_plan = list(wlan.get("mode_plan") or [])
     channel_plan = list(wlan.get("channel_plan") or [])
     if mode_plan and channel_plan:
@@ -427,33 +664,60 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                     )
                     for test in recipe.test_types:
                         ip = recipe.instrument_profile_by_test[test]
-                        for voltage_axis in voltage_axes:
-                            voltage_tags = dict(voltage_axis or {})
-                            key = (
-                                f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{standard}|{phy_mode}|"
-                                f"{test}|CH{ch}|BW{bw}{_voltage_key_suffix(voltage_tags)}"
-                            )
-                            tags = _merge_case_tags(
-                                recipe,
-                                ch,
-                                ip,
-                                {
-                                    "group": find_group(ch),
-                                    "phy_mode": phy_mode,
-                                    **voltage_tags,
-                                },
-                            )
-                            yield TestCase(
-                                test_type=test,
-                                band=recipe.band,
-                                standard=standard,
-                                channel=ch,
-                                center_freq_mhz=cf,
-                                bw_mhz=bw,
-                                instrument=dict(ip.settings),
-                                tags=tags,
-                                key=key,
-                            )
+                        data_rate_axes = _resolve_data_rate_axis_for_test(recipe_meta, standard=standard, test_type=test)
+                        log.info(
+                            "expand_recipe data rate decision | ruleset_id=%s standard=%s test_type=%s enabled=%s active=%s apply_to=%s apply_to_defined=%s applied=%s chosen_data_rates=%s",
+                            recipe.meta.get("ruleset_id", ""),
+                            standard,
+                            test,
+                            bool(recipe.meta.get("data_rate_policy_enabled")),
+                            any(bool(axis.get("data_rate_policy_active")) for axis in data_rate_axes),
+                            recipe.meta.get("data_rate_policy_apply_to", []),
+                            bool(recipe.meta.get("data_rate_policy_apply_to_defined")),
+                            any(bool(axis.get("data_rate_policy_applied")) for axis in data_rate_axes),
+                            [str(axis.get("data_rate", "") or "") for axis in data_rate_axes if axis.get("data_rate") not in (None, "")],
+                        )
+                        for data_rate_axis in data_rate_axes:
+                            for voltage_axis in voltage_axes_by_test.get(test, [{}]):
+                                voltage_tags = dict(voltage_axis or {})
+                                data_rate_tags = dict(data_rate_axis or {})
+                                key = (
+                                    f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{standard}|{phy_mode}|"
+                                    f"{test}|CH{ch}|BW{bw}{_data_rate_key_suffix(data_rate_tags)}{_voltage_key_suffix(voltage_tags)}"
+                                )
+                                tags = _merge_case_tags(
+                                    recipe,
+                                    ch,
+                                    ip,
+                                    {
+                                        "group": find_group(ch),
+                                        "phy_mode": phy_mode,
+                                        **data_rate_tags,
+                                        **voltage_tags,
+                                    },
+                                )
+                                log.debug(
+                                    "expand_recipe case generated | case_key=%s test_type=%s standard=%s data_rate=%s applied_rate=%s applied_voltage=%s condition=%s target_voltage_v=%s",
+                                    key,
+                                    test,
+                                    standard,
+                                    tags.get("data_rate", ""),
+                                    bool(tags.get("data_rate_policy_applied")),
+                                    bool(tags.get("voltage_policy_applied")),
+                                    tags.get("voltage_condition", ""),
+                                    tags.get("target_voltage_v"),
+                                )
+                                yield TestCase(
+                                    test_type=test,
+                                    band=recipe.band,
+                                    standard=standard,
+                                    channel=ch,
+                                    center_freq_mhz=cf,
+                                    bw_mhz=bw,
+                                    instrument=dict(ip.settings),
+                                    tags=tags,
+                                    key=key,
+                                )
         return
 
     pol = recipe.channel_policy
@@ -499,29 +763,56 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
         for bw in recipe.bandwidth_mhz:
             for ch in channels:
                 cf = center_freq_mhz_from_channel_5g(ch) if recipe.band == "5G" else 0.0
-                for voltage_axis in voltage_axes:
-                    voltage_tags = dict(voltage_axis or {})
-                    key = (
-                        f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{recipe.standard}|"
-                        f"{test}|CH{ch}|BW{bw}{_voltage_key_suffix(voltage_tags)}"
-                    )
-                    tags = _merge_case_tags(
-                        recipe,
-                        ch,
-                        ip,
-                        {
-                            "group": find_group(ch),
-                            **voltage_tags,
-                        },
-                    )
-                    yield TestCase(
-                        test_type=test,
-                        band=recipe.band,
-                        standard=recipe.standard,
-                        channel=ch,
-                        center_freq_mhz=cf,
-                        bw_mhz=bw,
-                        instrument=dict(ip.settings),
-                        tags=tags,
-                        key=key,
-                    )
+                data_rate_axes = _resolve_data_rate_axis_for_test(recipe_meta, standard=recipe.standard, test_type=test)
+                log.info(
+                    "expand_recipe data rate decision | ruleset_id=%s standard=%s test_type=%s enabled=%s active=%s apply_to=%s apply_to_defined=%s applied=%s chosen_data_rates=%s",
+                    recipe.meta.get("ruleset_id", ""),
+                    recipe.standard,
+                    test,
+                    bool(recipe.meta.get("data_rate_policy_enabled")),
+                    any(bool(axis.get("data_rate_policy_active")) for axis in data_rate_axes),
+                    recipe.meta.get("data_rate_policy_apply_to", []),
+                    bool(recipe.meta.get("data_rate_policy_apply_to_defined")),
+                    any(bool(axis.get("data_rate_policy_applied")) for axis in data_rate_axes),
+                    [str(axis.get("data_rate", "") or "") for axis in data_rate_axes if axis.get("data_rate") not in (None, "")],
+                )
+                for data_rate_axis in data_rate_axes:
+                    for voltage_axis in voltage_axes_by_test.get(test, [{}]):
+                        voltage_tags = dict(voltage_axis or {})
+                        data_rate_tags = dict(data_rate_axis or {})
+                        key = (
+                            f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{recipe.standard}|"
+                            f"{test}|CH{ch}|BW{bw}{_data_rate_key_suffix(data_rate_tags)}{_voltage_key_suffix(voltage_tags)}"
+                        )
+                        tags = _merge_case_tags(
+                            recipe,
+                            ch,
+                            ip,
+                            {
+                                "group": find_group(ch),
+                                **data_rate_tags,
+                                **voltage_tags,
+                            },
+                        )
+                        log.debug(
+                            "expand_recipe case generated | case_key=%s test_type=%s standard=%s data_rate=%s applied_rate=%s applied_voltage=%s condition=%s target_voltage_v=%s",
+                            key,
+                            test,
+                            recipe.standard,
+                            tags.get("data_rate", ""),
+                            bool(tags.get("data_rate_policy_applied")),
+                            bool(tags.get("voltage_policy_applied")),
+                            tags.get("voltage_condition", ""),
+                            tags.get("target_voltage_v"),
+                        )
+                        yield TestCase(
+                            test_type=test,
+                            band=recipe.band,
+                            standard=recipe.standard,
+                            channel=ch,
+                            center_freq_mhz=cf,
+                            bw_mhz=bw,
+                            instrument=dict(ip.settings),
+                            tags=tags,
+                            key=key,
+                        )

@@ -13,6 +13,23 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
+def _normalize_apply_to(raw: Any) -> tuple[List[str], bool]:
+    if raw is None:
+        return [], False
+    if not isinstance(raw, list):
+        return [], True
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        name = str(item or "").strip().upper()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out, True
+
+
 def normalize_voltage_policy(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     data = dict(raw or {})
     levels_raw = list(data.get("levels") or [])
@@ -41,13 +58,50 @@ def normalize_voltage_policy(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     if settle_time_ms < 0:
         settle_time_ms = 0
 
+    apply_to, apply_to_defined = _normalize_apply_to(data.get("apply_to"))
+
     return {
         "enabled": bool(data.get("enabled", False)),
         "mode": str(data.get("mode", "PERCENT_OF_NOMINAL")).strip() or "PERCENT_OF_NOMINAL",
         "nominal_source": str(data.get("nominal_source", "preset.nominal_voltage_v")).strip() or "preset.nominal_voltage_v",
         "levels": levels,
+        "apply_to": apply_to,
+        "apply_to_defined": apply_to_defined,
         "settle_time_ms": settle_time_ms,
         "fallback_policy": str(data.get("fallback_policy", "WARN_AND_CONTINUE")).strip() or "WARN_AND_CONTINUE",
+    }
+
+
+def normalize_data_rate_policy(raw: Dict[str, Any] | None) -> Dict[str, Any]:
+    data = dict(raw or {})
+    apply_to, apply_to_defined = _normalize_apply_to(data.get("apply_to"))
+
+    by_standard_raw = dict(data.get("by_standard") or {})
+    by_standard: Dict[str, List[str]] = {}
+    for standard, rates_raw in by_standard_raw.items():
+        standard_name = str(standard or "").strip()
+        if not standard_name:
+            continue
+        rates: List[str] = []
+        seen_rates: set[str] = set()
+        for item in (rates_raw or []):
+            rate_name = str(item or "").strip().upper()
+            if not rate_name or rate_name in seen_rates:
+                continue
+            seen_rates.add(rate_name)
+            rates.append(rate_name)
+        by_standard[standard_name] = rates
+
+    fallback_rate = str(data.get("fallback_rate", "") or "").strip().upper()
+    non_applicable_mode = str(data.get("non_applicable_mode", "OMIT")).strip().upper() or "OMIT"
+
+    return {
+        "enabled": bool(data.get("enabled", False)),
+        "apply_to": apply_to,
+        "apply_to_defined": apply_to_defined,
+        "by_standard": by_standard,
+        "fallback_rate": fallback_rate,
+        "non_applicable_mode": non_applicable_mode,
     }
 
 
@@ -208,6 +262,7 @@ class RuleSet:
     instrument_profiles: Dict[str, InstrumentProfile]
     plan_modes: Dict[str, PlanMode]
     voltage_policy: Dict[str, Any]
+    data_rate_policy: Dict[str, Any]
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "RuleSet":
@@ -248,4 +303,5 @@ class RuleSet:
             instrument_profiles=instrument_profiles,
             plan_modes=plan_modes,
             voltage_policy=normalize_voltage_policy(d.get("voltage_policy") or {}),
+            data_rate_policy=normalize_data_rate_policy(d.get("data_rate_policy") or {}),
         )

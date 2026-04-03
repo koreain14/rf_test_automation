@@ -27,6 +27,7 @@ class RuleSet:
     test_contracts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     test_labels: Dict[str, str] = field(default_factory=dict)
     voltage_policy: Dict[str, Any] = field(default_factory=dict)
+    data_rate_policy: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

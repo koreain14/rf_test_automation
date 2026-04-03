@@ -159,7 +159,7 @@ class CompareTab(QWidget):
         self.compare_model = QStandardItemModel()
         self.compare_model.setSortRole(Qt.UserRole)
         self.compare_model.setHorizontalHeaderLabels([
-            "Test", "Band", "BW", "CH", "Voltage Cond", "Voltage (V)", "Run A", "Run B", "Delta", "Unit", "Status A", "Status B",
+            "Test", "Band", "Standard", "Data Rate", "BW", "CH", "Voltage Cond", "Voltage (V)", "Run A", "Run B", "Delta", "Unit", "Status A", "Status B",
         ])
         self.compare_table.setModel(self.compare_model)
         self.compare_table.setSelectionBehavior(QTableView.SelectRows)
@@ -360,7 +360,7 @@ class CompareTab(QWidget):
         return filtered
 
     def _render_compare_rows(self, rows: List[Dict]) -> None:
-        headers = ["Test", "Band", "BW", "CH", "Voltage Cond", "Voltage (V)", "Run A", "Run B", "Delta", "Unit", "Status A", "Status B"]
+        headers = ["Test", "Band", "Standard", "Data Rate", "BW", "CH", "Voltage Cond", "Voltage (V)", "Run A", "Run B", "Delta", "Unit", "Status A", "Status B"]
         self.compare_model.clear()
         self.compare_model.setHorizontalHeaderLabels(headers)
 
@@ -370,6 +370,8 @@ class CompareTab(QWidget):
             display_values = [
                 str(row.get("test_type", "")),
                 str(row.get("band", "")),
+                str(row.get("standard", "")),
+                str(row.get("data_rate", "")),
                 str(row.get("bw_mhz", "")),
                 str(row.get("channel", "")),
                 str(row.get("voltage_condition", "")),
@@ -384,6 +386,8 @@ class CompareTab(QWidget):
             sort_values = [
                 str(row.get("test_type", "")),
                 str(row.get("band", "")),
+                str(row.get("standard", "")),
+                str(row.get("data_rate", "")),
                 self._as_sortable_number(row.get("bw_mhz")),
                 self._as_sortable_number(row.get("channel")),
                 str(row.get("voltage_condition", "")),
@@ -399,7 +403,7 @@ class CompareTab(QWidget):
             for idx, text in enumerate(display_values):
                 item = QStandardItem(text)
                 item.setData(sort_values[idx], Qt.UserRole)
-                if idx in (2, 3, 5, 6, 7, 8, 9):
+                if idx in (4, 5, 6, 7, 8, 9, 10, 11):
                     item.setTextAlignment(Qt.AlignCenter)
                 items.append(item)
 
@@ -518,7 +522,7 @@ class CompareTab(QWidget):
     def _build_compare_detail_text(self, row: Dict) -> str:
         lines = [
             f"Test: {row.get('test_type', '')}",
-            f"Band/BW/CH: {row.get('band', '')} / {row.get('bw_mhz', '')} / {row.get('channel', '')}",
+            f"Band/Standard/Data Rate/BW/CH: {row.get('band', '')} / {row.get('standard', '')} / {row.get('data_rate', '')} / {row.get('bw_mhz', '')} / {row.get('channel', '')}",
             f"Run A Measured: {format_numeric_value(row.get('measured_a'))}",
             f"Run B Measured: {format_numeric_value(row.get('measured_b'))}",
             f"Delta: {format_difference_value(row.get('delta_value'))}",
@@ -567,6 +571,8 @@ class CompareTab(QWidget):
         cols = [
             ("test_type", "Test"),
             ("band", "Band"),
+            ("standard", "Standard"),
+            ("data_rate", "Data Rate"),
             ("bw_mhz", "BW(MHz)"),
             ("channel", "CH"),
             ("voltage_condition", "Voltage Cond"),
@@ -620,6 +626,8 @@ class CompareTab(QWidget):
         cols = [
             ("test_type", "Test"),
             ("band", "Band"),
+            ("standard", "Standard"),
+            ("data_rate", "Data Rate"),
             ("bw_mhz", "BW(MHz)"),
             ("channel", "CH"),
             ("voltage_condition", "Voltage Cond"),
@@ -679,7 +687,7 @@ class CompareTab(QWidget):
                         ws.cell(row=row_index, column=col_index).fill = fill
                         ws.cell(row=row_index, column=col_index).font = light_font
 
-            widths = [12, 10, 10, 8, 16, 12, 14, 14, 16, 12, 12, 12, 16, 16, 12, 12, 14, 14, 12, 12]
+            widths = [12, 10, 14, 12, 10, 8, 16, 12, 14, 14, 16, 12, 12, 12, 16, 16, 12, 12, 14, 14, 12, 12]
             for col_index, width in enumerate(widths, start=1):
                 ws.column_dimensions[ws.cell(row=1, column=col_index).column_letter].width = width
             wb.save(path)

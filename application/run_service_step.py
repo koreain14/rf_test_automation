@@ -190,6 +190,7 @@ class RunServiceStep:
                     "channel": case.channel,
                     "test_type": case.test_type,
                     "standard": case.standard,
+                    "data_rate": tags.get("data_rate", ""),
                     "case_key": case.key,
                     "voltage_condition": tags.get("voltage_condition", ""),
                     "target_voltage_v": tags.get("target_voltage_v"),

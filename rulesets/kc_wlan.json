@@ -269,6 +269,11 @@
     "enabled": true,
     "mode": "PERCENT_OF_NOMINAL",
     "nominal_source": "preset.nominal_voltage_v",
+    "apply_to": [
+      "PSD",
+      "OBW",
+      "SP"
+    ],
     "settle_time_ms": 500,
     "fallback_policy": "WARN_AND_CONTINUE",
     "levels": [
@@ -288,6 +293,23 @@
         "percent_offset": 5
       }
     ]
+  },
+  "data_rate_policy": {
+    "enabled": true,
+    "apply_to": [
+      "PSD",
+      "RX"
+    ],
+    "non_applicable_mode": "OMIT",
+    "by_standard": {
+      "802.11b": ["1M", "2M", "5.5M", "11M"],
+      "802.11g": ["6M", "12M", "24M", "54M"],
+      "802.11a": ["6M", "12M", "24M", "54M"],
+      "802.11n": ["MCS0", "MCS7"],
+      "802.11ac": ["MCS0", "MCS9"],
+      "802.11ax": ["MCS0", "MCS11"],
+      "802.11be": ["MCS0", "MCS13"]
+    }
   },
   "test_labels": {
     "PSD": "Power Spectral Density (PSD)",

@@ -13,6 +13,8 @@ class ResultsTableModel(QAbstractTableModel):
         "Status",
         "Test",
         "Band",
+        "Standard",
+        "Data Rate",
         "BW",
         "CH",
         "Voltage Cond",
@@ -61,24 +63,28 @@ class ResultsTableModel(QAbstractTableModel):
             if col == 2:
                 return row.get("band", "")
             if col == 3:
-                return str(row.get("bw_mhz", ""))
+                return row.get("standard", "")
             if col == 4:
-                return str(row.get("channel", ""))
+                return row.get("data_rate", "")
             if col == 5:
-                return row.get("voltage_condition", "")
+                return str(row.get("bw_mhz", ""))
             if col == 6:
-                return self._format_voltage(row.get("target_voltage_v"))
+                return str(row.get("channel", ""))
             if col == 7:
+                return row.get("voltage_condition", "")
+            if col == 8:
+                return self._format_voltage(row.get("target_voltage_v"))
+            if col == 9:
                 value = row.get("measured_value")
                 return format_numeric_value(value)
-            if col == 8:
+            if col == 10:
                 value = row.get("limit_value")
                 return format_numeric_value(value)
-            if col == 9:
-                return format_difference_value(row.get("difference_value"))
-            if col == 10:
-                return row.get("measurement_unit", "") or row.get("difference_unit", "")
             if col == 11:
+                return format_difference_value(row.get("difference_value"))
+            if col == 12:
+                return row.get("measurement_unit", "") or row.get("difference_unit", "")
+            if col == 13:
                 return "Yes" if row.get("has_screenshot") else ""
 
         if role == Qt.UserRole:
@@ -89,22 +95,26 @@ class ResultsTableModel(QAbstractTableModel):
             if col == 2:
                 return str(row.get("band", ""))
             if col == 3:
-                return self._as_sortable_number(row.get("bw_mhz"))
+                return str(row.get("standard", ""))
             if col == 4:
-                return self._as_sortable_number(row.get("channel"))
+                return str(row.get("data_rate", ""))
             if col == 5:
-                return str(row.get("voltage_condition", ""))
+                return self._as_sortable_number(row.get("bw_mhz"))
             if col == 6:
-                return self._as_sortable_number(row.get("target_voltage_v"))
+                return self._as_sortable_number(row.get("channel"))
             if col == 7:
-                return self._as_sortable_number(row.get("measured_value"))
+                return str(row.get("voltage_condition", ""))
             if col == 8:
-                return self._as_sortable_number(row.get("limit_value"))
+                return self._as_sortable_number(row.get("target_voltage_v"))
             if col == 9:
-                return self._as_sortable_number(row.get("difference_value"))
+                return self._as_sortable_number(row.get("measured_value"))
             if col == 10:
-                return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+                return self._as_sortable_number(row.get("limit_value"))
             if col == 11:
+                return self._as_sortable_number(row.get("difference_value"))
+            if col == 12:
+                return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+            if col == 13:
                 return 1 if row.get("has_screenshot") else 0
 
         if role == Qt.BackgroundRole:
@@ -122,7 +132,7 @@ class ResultsTableModel(QAbstractTableModel):
             if status in ("FAIL", "ERROR", "SKIP"):
                 return QBrush(QColor("#F8FAFC"))
 
-            if col == 9:
+            if col == 11:
                 value = row.get("difference_value")
                 try:
                     numeric = float(value)
@@ -140,18 +150,18 @@ class ResultsTableModel(QAbstractTableModel):
             if col == 0:
                 font.setBold(True)
                 return font
-            if status in ("FAIL", "ERROR") and col in (0, 9, 11):
+            if status in ("FAIL", "ERROR") and col in (0, 11, 13):
                 font.setBold(True)
                 return font
 
         if role == Qt.TextAlignmentRole:
-            if col in (3, 4, 5, 6, 7, 8, 9, 10, 11):
+            if col in (5, 6, 7, 8, 9, 10, 11, 12, 13):
                 return Qt.AlignCenter
 
         if role == Qt.ToolTipRole:
-            if col == 9:
-                return format_difference(row.get("difference_value"), row.get("difference_unit", ""))
             if col == 11:
+                return format_difference(row.get("difference_value"), row.get("difference_unit", ""))
+            if col == 13:
                 return row.get("screenshot_path", "") or row.get("screenshot_abs_path", "")
             details = [
                 f"Key: {row.get('test_key', '')}",
@@ -180,22 +190,26 @@ class ResultsTableModel(QAbstractTableModel):
         if column == 2:
             return str(row.get("band", ""))
         if column == 3:
-            return self._as_sortable_number(row.get("bw_mhz"))
+            return str(row.get("standard", ""))
         if column == 4:
-            return self._as_sortable_number(row.get("channel"))
+            return str(row.get("data_rate", ""))
         if column == 5:
-            return str(row.get("voltage_condition", ""))
+            return self._as_sortable_number(row.get("bw_mhz"))
         if column == 6:
-            return self._as_sortable_number(row.get("target_voltage_v"))
+            return self._as_sortable_number(row.get("channel"))
         if column == 7:
-            return self._as_sortable_number(row.get("measured_value"))
+            return str(row.get("voltage_condition", ""))
         if column == 8:
-            return self._as_sortable_number(row.get("limit_value"))
+            return self._as_sortable_number(row.get("target_voltage_v"))
         if column == 9:
-            return self._as_sortable_number(row.get("difference_value"))
+            return self._as_sortable_number(row.get("measured_value"))
         if column == 10:
-            return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+            return self._as_sortable_number(row.get("limit_value"))
         if column == 11:
+            return self._as_sortable_number(row.get("difference_value"))
+        if column == 12:
+            return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+        if column == 13:
             return 1 if row.get("has_screenshot") else 0
         return ""
 

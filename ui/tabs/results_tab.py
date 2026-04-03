@@ -328,6 +328,8 @@ class ResultsTab(QWidget):
                 hay = " ".join([
                     str(row.get("test_type", "")),
                     str(row.get("band", "")),
+                    str(row.get("standard", "")),
+                    str(row.get("data_rate", "")),
                     str(row.get("channel", "")),
                     str(row.get("bw_mhz", "")),
                     str(row.get("measurement_unit", "")),
@@ -549,6 +551,8 @@ class ResultsTab(QWidget):
             f"Comparator: {row.get('comparator', '')}",
             f"Method: {row.get('measurement_method', '')}",
             f"Profile: {row.get('measurement_profile_name', '')}",
+            f"Standard: {row.get('standard', '')}",
+            f"Data Rate: {row.get('data_rate', '')}",
             f"Voltage Condition: {row.get('voltage_condition', '')}",
             f"Nominal Voltage (V): {row.get('nominal_voltage_v', '')}",
             f"Target Voltage (V): {row.get('target_voltage_v', '')}",
@@ -618,6 +622,8 @@ class ResultsTab(QWidget):
             ("status", "Status"),
             ("test_type", "Test"),
             ("band", "Band"),
+            ("standard", "Standard"),
+            ("data_rate", "Data Rate"),
             ("bw_mhz", "BW(MHz)"),
             ("channel", "CH"),
             ("voltage_condition", "Voltage Cond"),
@@ -643,6 +649,8 @@ class ResultsTab(QWidget):
             ("status", "Status"),
             ("test_type", "Test"),
             ("band", "Band"),
+            ("standard", "Standard"),
+            ("data_rate", "Data Rate"),
             ("bw_mhz", "BW(MHz)"),
             ("channel", "CH"),
             ("voltage_condition", "Voltage Cond"),
@@ -670,7 +678,7 @@ class ResultsTab(QWidget):
             for c_i, (key, _) in enumerate(cols, start=1):
                 ws.cell(row=r_i, column=c_i, value=export_row.get(key, ""))
 
-        widths = [12, 12, 10, 10, 8, 16, 12, 14, 14, 18, 14, 12, 40, 26, 26]
+        widths = [12, 12, 10, 14, 12, 10, 8, 16, 12, 14, 14, 18, 14, 12, 40, 26, 26]
         for c_i, width in enumerate(widths, start=1):
             ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = width
         wb.save(path)

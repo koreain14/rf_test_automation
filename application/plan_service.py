@@ -7,7 +7,7 @@ from domain.models import (
     InstrumentProfile, Match, OverrideRule, Preset, Recipe, RuleSet, TestCase
 )
 from domain.expand import build_recipe, expand_recipe
-from domain.ruleset_models import normalize_voltage_policy
+from domain.ruleset_models import normalize_data_rate_policy, normalize_voltage_policy
 from domain.overrides import apply_overrides
 from infrastructure.plan_repo_sqlite import PlanRepositorySQLite
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
@@ -76,6 +76,7 @@ class PlanService:
             test_contracts=dict(raw.get("test_contracts", {}) or {}),
             test_labels={str(k): str(v) for k, v in (raw.get("test_labels", {}) or {}).items()},
             voltage_policy=normalize_voltage_policy(raw.get("voltage_policy") or {}),
+            data_rate_policy=normalize_data_rate_policy(raw.get("data_rate_policy") or {}),
         )
 
         self._ruleset_cache[ruleset_id] = rs
@@ -564,6 +565,7 @@ class PlanService:
                 "test_type": normalize_test_type_symbol(r.get("test_type", "")),
                 "band": r.get("band", ""),
                 "standard": r.get("standard", ""),
+                "data_rate": r.get("data_rate", ""),
                 "group": r.get("group", ""),
                 "channel": r.get("channel"),
                 "bw_mhz": r.get("bw_mhz"),
@@ -601,6 +603,7 @@ class PlanService:
                 str(r.get("standard", "")),
                 str(r.get("channel", "")),
                 str(r.get("bw_mhz", "")),
+                str(r.get("data_rate", "")),
                 str(r.get("voltage_condition", "")),
                 str(r.get("target_voltage_v", "")),
             )
@@ -651,7 +654,8 @@ class PlanService:
                 "standard": key[3],
                 "channel": key[4],
                 "bw_mhz": key[5],
-                "voltage_condition": key[6],
+                "data_rate": key[6],
+                "voltage_condition": key[7],
                 "status_a": status_a,
                 "status_b": status_b,
                 "margin_a": "" if margin_a is None else margin_a,
@@ -676,6 +680,7 @@ class PlanService:
                 "screenshot_abs_path_b": b.get("screenshot_abs_path", ""),
                 "has_screenshot_a": bool(a.get("has_screenshot")),
                 "has_screenshot_b": bool(b.get("has_screenshot")),
+                "data_rate": a.get("data_rate") or b.get("data_rate") or "",
                 "voltage_condition": a.get("voltage_condition") or b.get("voltage_condition") or "",
                 "nominal_voltage_v_a": a.get("nominal_voltage_v"),
                 "nominal_voltage_v_b": b.get("nominal_voltage_v"),

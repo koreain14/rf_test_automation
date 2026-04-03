@@ -492,7 +492,10 @@ class VoltageConditionController:
             "ruleset_id": tags.get("ruleset_id", ""),
             "voltage_policy_enabled": bool(tags.get("voltage_policy_enabled")),
             "voltage_policy_active": bool(tags.get("voltage_policy_active")),
+            "voltage_policy_applied": bool(tags.get("voltage_policy_applied")),
             "voltage_policy_status": str(tags.get("voltage_policy_status", "") or ""),
+            "voltage_policy_apply_to": list(tags.get("voltage_policy_apply_to") or []),
+            "data_rate": str(tags.get("data_rate", "") or ""),
             "voltage_condition": str(tags.get("voltage_condition", "") or ""),
             "nominal_voltage_v": tags.get("nominal_voltage_v"),
             "target_voltage_v": tags.get("target_voltage_v"),
@@ -506,6 +509,20 @@ class VoltageConditionController:
         }
 
         if not data["voltage_policy_enabled"]:
+            return
+
+        if not data["voltage_policy_active"] or not data["voltage_policy_applied"]:
+            data["apply_status"] = "NOT_APPLICABLE"
+            data["message"] = "Voltage policy is enabled but not applied to this test case."
+            self._append_step_result(project_id=project_id, result_id=result_id, status="INFO", data=data)
+            log.info(
+                "case voltage skipped | run=%s case=%s test_type=%s status=%s apply_to=%s",
+                run_id,
+                getattr(case, "key", ""),
+                getattr(case, "test_type", ""),
+                data["voltage_policy_status"],
+                data.get("voltage_policy_apply_to", []),
+            )
             return
 
         target_voltage_v = self._as_float(data.get("target_voltage_v"))
@@ -668,6 +685,7 @@ class CaseExecutionPipeline:
             "center_freq_mhz": getattr(previous_case, "center_freq_mhz", None) if previous_case is not None else None,
             "bw_mhz": getattr(previous_case, "bw_mhz", None) if previous_case is not None else None,
             "phy_mode": previous_tags.get("phy_mode"),
+            "data_rate": previous_tags.get("data_rate"),
             "voltage_condition": previous_tags.get("voltage_condition"),
             "target_voltage_v": previous_tags.get("target_voltage_v"),
             "nominal_voltage_v": previous_tags.get("nominal_voltage_v"),
@@ -677,6 +695,7 @@ class CaseExecutionPipeline:
             "center_freq_mhz": getattr(current_case, "center_freq_mhz", None),
             "bw_mhz": getattr(current_case, "bw_mhz", None),
             "phy_mode": current_tags.get("phy_mode"),
+            "data_rate": current_tags.get("data_rate"),
             "voltage_condition": current_tags.get("voltage_condition"),
             "target_voltage_v": current_tags.get("target_voltage_v"),
             "nominal_voltage_v": current_tags.get("nominal_voltage_v"),
@@ -688,6 +707,8 @@ class CaseExecutionPipeline:
             instructions.append(f"Bandwidth: {current.get('bw_mhz')} MHz")
         if prev_key is None or previous.get("phy_mode") != current.get("phy_mode"):
             instructions.append(f"Mode: {current.get('phy_mode') or current_case.standard}")
+        if prev_key is None or previous.get("data_rate") != current.get("data_rate"):
+            instructions.append(f"Data Rate: {current.get('data_rate') or '-'}")
         if prev_key is None or previous.get("band") != current.get("band"):
             instructions.append(f"Band: {current.get('band')}")
         if prev_key is None or previous.get("voltage_condition") != current.get("voltage_condition"):
@@ -800,6 +821,7 @@ class CaseExecutionPipeline:
             float(getattr(case, "center_freq_mhz", 0.0) or 0.0),
             float(getattr(case, "bw_mhz", 0.0) or 0.0),
             phy_mode,
+            str(tags.get("data_rate") or ""),
             str(tags.get("voltage_condition") or ""),
             float(tags.get("target_voltage_v", 0.0) or 0.0),
         )

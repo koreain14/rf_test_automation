@@ -44,6 +44,7 @@ class PresetSerializer:
             measurement_profile_name=_resolve_measurement_profile_name(selection_raw),
             psd_result_unit=normalize_psd_result_unit(selection_raw.get("psd_result_unit")),
             nominal_voltage_v=_optional_float(selection_raw.get("nominal_voltage_v")),
+            selected_data_rates=_normalize_rate_list(selection_raw.get("selected_data_rates") or []),
             test_types=normalize_test_type_list(selection_raw.get("test_types") or []),
             bandwidth_mhz=bandwidth_summary,
             channels=ChannelSelectionModel(
@@ -102,6 +103,11 @@ class PresetSerializer:
             selection["nominal_voltage_v"] = nominal_voltage_v
         else:
             selection.pop("nominal_voltage_v", None)
+        selected_data_rates = _normalize_rate_list(selection.get("selected_data_rates") or [])
+        if selected_data_rates:
+            selection["selected_data_rates"] = selected_data_rates
+        else:
+            selection.pop("selected_data_rates", None)
         wlan_payload = _serialize_wlan_expansion(model.selection.wlan_expansion)
         selection["wlan_expansion"] = wlan_payload
         metadata = _serialize_selection_metadata(model.selection.metadata, wlan_payload)
@@ -256,3 +262,15 @@ def _optional_float(value: Any) -> float | None:
     except Exception:
         return None
     return number if number > 0 else None
+
+
+def _normalize_rate_list(values: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values or []:
+        name = str(item or "").strip().upper()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
