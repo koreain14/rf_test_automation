@@ -1,11 +1,28 @@
 {
   "id": "KC_WLAN",
   "version": "2026.02",
+  "schema_version": 2,
   "regulation": "KC",
   "tech": "WLAN",
+  "case_dimensions": {
+    "base": ["test_type", "band", "standard", "bw", "channel"],
+    "optional_axes": [
+      {"name": "voltage", "policy_ref": "voltage_policy"},
+      {"name": "data_rate", "policy_ref": "data_rate_policy"}
+    ]
+  },
   "bands": {
     "2.4G": {
       "psd_result_unit": "MW_PER_MHZ",
+      "psd_policy": {
+        "method": "MARKER_PEAK",
+        "result_unit": "MW_PER_MHZ",
+        "comparator": "upper_limit",
+        "limit": {
+          "value": 10.0,
+          "unit": "MW_PER_MHZ"
+        }
+      },
       "psd": {
         "method": "MARKER_PEAK",
         "limit_value": 10.0,
@@ -52,6 +69,15 @@
     },
     "5G": {
       "psd_result_unit": "MW_PER_MHZ",
+      "psd_policy": {
+        "method": "MARKER_PEAK",
+        "result_unit": "MW_PER_MHZ",
+        "comparator": "upper_limit",
+        "limit": {
+          "value": 10.0,
+          "unit": "MW_PER_MHZ"
+        }
+      },
       "psd": {
         "method": "MARKER_PEAK",
         "limit_value": 10.0,
@@ -139,6 +165,15 @@
     },
     "6G": {
       "psd_result_unit": "DBM_PER_MHZ",
+      "psd_policy": {
+        "method": "MARKER_PEAK",
+        "result_unit": "DBM_PER_MHZ",
+        "comparator": "upper_limit",
+        "limit": {
+          "value": 1,
+          "unit": "DBM_PER_MHZ"
+        }
+      },
       "psd": {
         "method": "MARKER_PEAK",
         "limit_value": 1,
@@ -257,6 +292,12 @@
       "trace_mode": "CLEARWRITE"
     }
   },
+  "instrument_profile_refs": {
+    "PSD": "PSD_DEFAULT",
+    "OBW": "OBW_DEFAULT",
+    "SP": "SP_DEFAULT",
+    "RX": "SP_DEFAULT"
+  },
   "plan_modes": {
     "Quick": {
       "channel_policy": "REPRESENTATIVES_ONLY"
@@ -326,7 +367,9 @@
     "occupied_bandwidth": {
       "id": "occupied_bandwidth",
       "name": "Occupied Bandwidth",
+      "apply_to_test_type": "OBW",
       "measurement_class": "spectrum",
+      "default_profile_ref": "OBW_DEFAULT",
       "default_profile": "OBW_DEFAULT",
       "required_instruments": [
         "analyzer"
@@ -335,12 +378,16 @@
         "measured_obw"
       ],
       "unit": "MHz",
+      "unit_source": "informational_only",
+      "policy_source": "band.psd_policy",
       "verdict_type": "limit_upper"
     },
     "power_spectral_density": {
       "id": "power_spectral_density",
       "name": "Power Spectral Density",
+      "apply_to_test_type": "PSD",
       "measurement_class": "spectrum",
+      "default_profile_ref": "PSD_DEFAULT",
       "default_profile": "PSD_DEFAULT",
       "required_instruments": [
         "analyzer"
@@ -349,6 +396,8 @@
         "measured_psd"
       ],
       "unit": "dBm/MHz",
+      "unit_source": "informational_only",
+      "policy_source": "band.psd_policy",
       "verdict_type": "limit_upper"
     }
   }

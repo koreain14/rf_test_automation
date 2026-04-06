@@ -73,7 +73,10 @@ def ruleset_default_psd_result_unit(ruleset: Any, band: str | None) -> str:
             bands = getattr(ruleset, "bands", {}) or {}
             band_info = bands.get(normalized_band)
             if band_info is not None:
-                value = normalize_psd_result_unit(getattr(band_info, "psd_result_unit", ""))
+                policy = _band_level_psd_config(band_info)
+                value = normalize_psd_result_unit(
+                    policy.get("result_unit") or getattr(band_info, "psd_result_unit", "")
+                )
                 if value:
                     return value
         except Exception:
@@ -99,7 +102,10 @@ def ruleset_default_psd_result_unit_from_file(
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 band_info = dict((raw.get("bands") or {}).get(normalized_band) or {})
-                value = normalize_psd_result_unit(band_info.get("psd_result_unit"))
+                psd_policy = dict(band_info.get("psd_policy") or {})
+                value = normalize_psd_result_unit(
+                    psd_policy.get("result_unit") or band_info.get("psd_result_unit")
+                )
                 if value:
                     return value
             except Exception:
@@ -215,9 +221,24 @@ def _ruleset_band_info(ruleset: Any, band: str | None) -> Any:
 def _band_level_psd_config(band_info: Any) -> dict[str, Any]:
     if band_info is None:
         return {}
+    normalized_policy = getattr(band_info, "psd_policy", None)
+    if isinstance(normalized_policy, dict) and normalized_policy:
+        limit = dict(normalized_policy.get("limit") or {})
+        return {
+            "method": normalized_policy.get("method"),
+            "result_unit": normalized_policy.get("result_unit"),
+            "limit_value": limit.get("value"),
+            "limit_unit": limit.get("unit"),
+            "comparator": normalized_policy.get("comparator"),
+            "source": "band.psd_policy",
+        }
     raw = getattr(band_info, "psd", None)
     if isinstance(raw, dict):
-        return dict(raw)
+        legacy = dict(raw)
+        legacy.setdefault("result_unit", getattr(band_info, "psd_result_unit", ""))
+        legacy.setdefault("comparator", "upper_limit")
+        legacy.setdefault("source", "band.psd")
+        return legacy
     return {}
 
 
@@ -229,7 +250,15 @@ def _device_level_psd_config(band_info: Any, device_class: str | None) -> dict[s
     if normalized_device_class:
         override = device_map.get(normalized_device_class)
         if isinstance(override, dict):
-            return dict(override)
+            limit = dict(override.get("limit") or {})
+            return {
+                **dict(override),
+                "method": override.get("method"),
+                "result_unit": override.get("result_unit"),
+                "limit_value": limit.get("value", override.get("limit_value")),
+                "limit_unit": limit.get("unit", override.get("limit_unit")),
+                "comparator": override.get("comparator"),
+            }
     return {}
 
 
@@ -262,6 +291,15 @@ def _resolve_ruleset_psd_limit(ruleset: Any, band: str | None, device_class: str
     return float(default_limit), result_unit
 
 
+def _resolve_ruleset_psd_comparator(ruleset: Any, band: str | None, device_class: str | None) -> str:
+    band_info = _ruleset_band_info(ruleset, band)
+    for source in (_device_level_psd_config(band_info, device_class), _band_level_psd_config(band_info)):
+        comparator = str(source.get("comparator", "") or "").strip()
+        if comparator:
+            return comparator
+    return "upper_limit"
+
+
 def resolve_psd_runtime_policy(
     *,
     band: str | None,
@@ -281,6 +319,7 @@ def resolve_psd_runtime_policy(
     if ruleset is not None:
         method = _resolve_ruleset_psd_method(ruleset, band, device_class)
         limit_value, limit_unit = _resolve_ruleset_psd_limit(ruleset, band, device_class)
+        comparator = _resolve_ruleset_psd_comparator(ruleset, band, device_class)
     else:
         method = default_psd_method_for_ruleset("")
         limit_unit = result_unit
@@ -289,6 +328,7 @@ def resolve_psd_runtime_policy(
             from_unit=PSD_CANONICAL_UNIT,
             to_unit=limit_unit,
         )
+        comparator = "upper_limit"
     canonical_limit_value = convert_psd_value(
         float(limit_value),
         from_unit=limit_unit,
@@ -300,6 +340,7 @@ def resolve_psd_runtime_policy(
         "limit_value": float(limit_value),
         "limit_unit": limit_unit,
         "limit_label": psd_unit_label(limit_unit),
+        "comparator": comparator,
         "canonical_limit_value": float(canonical_limit_value),
         "canonical_limit_unit": PSD_CANONICAL_UNIT,
     }

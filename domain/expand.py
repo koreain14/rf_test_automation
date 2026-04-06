@@ -295,6 +295,7 @@ def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = No
         "psd_limit_value": recipe.meta.get("psd_limit_value"),
         "psd_limit_unit": recipe.meta.get("psd_limit_unit", ""),
         "psd_limit_label": recipe.meta.get("psd_limit_label", ""),
+        "psd_comparator": recipe.meta.get("psd_comparator", ""),
         "psd_canonical_limit_value": recipe.meta.get("psd_canonical_limit_value"),
         "psd_unit_policy_source": recipe.meta.get("psd_unit_policy_source", ""),
         "voltage_policy_enabled": bool(recipe.meta.get("voltage_policy_enabled")),
@@ -311,6 +312,7 @@ def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = No
 
 
 def _resolve_profile_name_for_test_type(
+    ruleset,
     ip_map: Dict[str, Any],
     shared_profile_name: str,
     test_type: str,
@@ -322,6 +324,7 @@ def _resolve_profile_name_for_test_type(
     profile_name = str(
         ip_map.get(test_type)
         or shared_profile_name
+        or dict(getattr(ruleset, "instrument_profile_refs", {}) or {}).get(test_type)
         or default_profile_for_test_type(test_type)
         or "PSD_DEFAULT"
     ).strip()
@@ -454,6 +457,7 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     ip_by_test: Dict[str, InstrumentProfile] = {}
     ip_map = normalize_test_type_map(sel.get("instrument_profile_by_test") or {})
     effective_profile_map: Dict[str, str] = {}
+    effective_profile_ref_source: Dict[str, str] = {}
     selector_fallback_tests: List[str] = []
     device_class = str(sel.get("device_class", "")).strip()
     nominal_voltage_v = _coerce_float(sel.get("nominal_voltage_v"))
@@ -481,8 +485,16 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     )
     psd_unit_policy_source = "preset_override" if str(sel.get("psd_result_unit", "")).strip() else "ruleset_default"
     for t in test_types:
-        prof_name = _resolve_profile_name_for_test_type(ip_map, shared_profile_name, t)
+        prof_name = _resolve_profile_name_for_test_type(ruleset, ip_map, shared_profile_name, t)
         effective_profile_map[t] = prof_name
+        if normalize_profile_name(ip_map.get(t) or ""):
+            effective_profile_ref_source[t] = "preset.instrument_profile_by_test"
+        elif shared_profile_name:
+            effective_profile_ref_source[t] = "preset.measurement_profile_name"
+        elif dict(getattr(ruleset, "instrument_profile_refs", {}) or {}).get(t):
+            effective_profile_ref_source[t] = "ruleset.instrument_profile_refs"
+        else:
+            effective_profile_ref_source[t] = "default_profile_for_test_type"
         if shared_profile_name and not normalize_profile_name(ip_map.get(t) or ""):
             selector_fallback_tests.append(t)
         ip = ruleset.instrument_profiles.get(prof_name)
@@ -508,6 +520,8 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "measurement_profile_name": shared_profile_name,
         "measurement_profile_by_test": dict(ip_map),
         "effective_measurement_profile_by_test": dict(effective_profile_map),
+        "effective_measurement_profile_ref_source_by_test": dict(effective_profile_ref_source),
+        "instrument_profile_refs": dict(getattr(ruleset, "instrument_profile_refs", {}) or {}),
         "device_class": device_class,
         "voltage_policy": voltage_policy,
         "voltage_policy_enabled": voltage_policy_enabled,
@@ -529,6 +543,7 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "psd_limit_value": psd_policy["limit_value"],
         "psd_limit_unit": psd_policy["limit_unit"],
         "psd_limit_label": psd_policy["limit_label"],
+        "psd_comparator": psd_policy["comparator"],
         "psd_canonical_limit_value": psd_policy["canonical_limit_value"],
         "psd_unit_policy_source": psd_unit_policy_source,
     }
@@ -692,6 +707,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                                     {
                                         "group": find_group(ch),
                                         "phy_mode": phy_mode,
+                                        "measurement_profile_ref_source": recipe.meta.get("effective_measurement_profile_ref_source_by_test", {}).get(test, ""),
                                         **data_rate_tags,
                                         **voltage_tags,
                                     },
@@ -790,6 +806,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                             ip,
                             {
                                 "group": find_group(ch),
+                                "measurement_profile_ref_source": recipe.meta.get("effective_measurement_profile_ref_source_by_test", {}).get(test, ""),
                                 **data_rate_tags,
                                 **voltage_tags,
                             },

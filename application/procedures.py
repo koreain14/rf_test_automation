@@ -174,6 +174,11 @@ class PsdMeasureStep:
         return normalize_psd_method(tags.get("psd_method")) or PSD_METHOD_MARKER_PEAK
 
     @staticmethod
+    def _comparator_from_case(case) -> str:
+        tags = dict(getattr(case, "tags", {}) or {})
+        return str(tags.get("psd_comparator", "upper_limit") or "upper_limit")
+
+    @staticmethod
     def _limit_from_case(case, display_unit: str) -> tuple[float, float, str]:
         tags = dict(getattr(case, "tags", {}) or {})
         raw_limit = tags.get("psd_limit_value")
@@ -242,6 +247,7 @@ class PsdMeasureStep:
                     raise RuntimeError("No trace")
                 display_unit = self._display_unit_from_case(ctx.case)
                 psd_method = self._method_from_case(ctx.case)
+                comparator = self._comparator_from_case(ctx.case)
                 if psd_method == PSD_METHOD_AVERAGE:
                     measured = sum(float(x) for x in trace) / float(len(trace))
                 else:
@@ -279,7 +285,7 @@ class PsdMeasureStep:
                     "psd_unit_policy_source": str((getattr(ctx.case, "tags", {}) or {}).get("psd_unit_policy_source", "")),
                     "difference_value": difference_value,
                     "difference_unit": self._display_unit_label(display_unit),
-                    "comparator": "upper_limit",
+                    "comparator": comparator,
                     "display_measured_value": display_payload["display_value"],
                     "display_limit_value": display_limit_payload["display_value"],
                     "display_measurement_unit": self._display_unit_label(display_payload["display_unit"]),

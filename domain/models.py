@@ -22,12 +22,15 @@ class RuleSet:
     regulation: Regulation
     tech: Tech
     bands: Dict[str, Dict[str, Any]]
+    schema_version: int = 1
     instrument_profiles: Dict[str, InstrumentProfile] = field(default_factory=dict)
+    instrument_profile_refs: Dict[str, str] = field(default_factory=dict)
     plan_modes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     test_contracts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     test_labels: Dict[str, str] = field(default_factory=dict)
     voltage_policy: Dict[str, Any] = field(default_factory=dict)
     data_rate_policy: Dict[str, Any] = field(default_factory=dict)
+    case_dimensions: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -30,6 +30,156 @@ def _normalize_apply_to(raw: Any) -> tuple[List[str], bool]:
     return out, True
 
 
+def _normalize_psd_unit(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    aliases = {
+        "": "",
+        "MW_PER_MHZ": "MW_PER_MHZ",
+        "MW/MHZ": "MW_PER_MHZ",
+        "DBM_PER_MHZ": "DBM_PER_MHZ",
+        "DBM/MHZ": "DBM_PER_MHZ",
+    }
+    return aliases.get(text, text)
+
+
+def _normalize_psd_method(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    aliases = {
+        "": "",
+        "MARKER": "MARKER_PEAK",
+        "PEAK": "MARKER_PEAK",
+        "MARKER_PEAK": "MARKER_PEAK",
+        "AVG": "AVERAGE",
+        "AVERAGE": "AVERAGE",
+        "TRACE_AVERAGE": "AVERAGE",
+    }
+    return aliases.get(text, text)
+
+
+def normalize_psd_policy(raw_band: Dict[str, Any] | None) -> Dict[str, Any]:
+    band = dict(raw_band or {})
+    legacy_psd = dict(band.get("psd") or {})
+    explicit = dict(band.get("psd_policy") or {})
+    limit_block = dict(explicit.get("limit") or {})
+
+    result_unit = _normalize_psd_unit(
+        explicit.get("result_unit", band.get("psd_result_unit"))
+    )
+    method = _normalize_psd_method(
+        explicit.get("method", legacy_psd.get("method", band.get("psd_method")))
+    )
+    comparator = str(explicit.get("comparator", "upper_limit") or "upper_limit").strip() or "upper_limit"
+    raw_limit_value = (
+        limit_block.get("value")
+        if limit_block.get("value") not in (None, "")
+        else explicit.get("limit_value", legacy_psd.get("limit_value", band.get("psd_limit_value")))
+    )
+    try:
+        limit_value = float(raw_limit_value) if raw_limit_value not in (None, "") else None
+    except Exception:
+        limit_value = None
+    limit_unit = _normalize_psd_unit(
+        limit_block.get("unit")
+        or explicit.get("limit_unit")
+        or legacy_psd.get("limit_unit")
+        or band.get("psd_limit_unit")
+        or result_unit
+    )
+
+    return {
+        "method": method,
+        "result_unit": result_unit,
+        "comparator": comparator,
+        "limit": {
+            "value": limit_value,
+            "unit": limit_unit,
+        },
+        "legacy_fields_present": {
+            "psd_result_unit": band.get("psd_result_unit") not in (None, ""),
+            "psd": bool(legacy_psd),
+            "psd_policy": bool(explicit),
+        },
+    }
+
+
+def normalize_instrument_profile_refs(
+    raw: Dict[str, Any] | None,
+    *,
+    test_contracts: Dict[str, Any] | None = None,
+) -> Dict[str, str]:
+    data = dict(raw or {})
+    out: Dict[str, str] = {}
+    for key, value in data.items():
+        name = str(key or "").strip().upper()
+        ref = str(value or "").strip()
+        if not name or not ref:
+            continue
+        out[name] = ref
+
+    for _, contract in dict(test_contracts or {}).items():
+        if not isinstance(contract, dict):
+            continue
+        apply_to = str(contract.get("apply_to_test_type") or "").strip().upper()
+        ref = str(contract.get("default_profile_ref") or contract.get("default_profile") or "").strip()
+        if apply_to and ref and apply_to not in out:
+            out[apply_to] = ref
+    return out
+
+
+def normalize_test_contracts(raw: Dict[str, Any] | None) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, value in dict(raw or {}).items():
+        if not isinstance(value, dict):
+            continue
+        contract = dict(value)
+        default_profile_ref = str(contract.get("default_profile_ref") or contract.get("default_profile") or "").strip()
+        normalized = {
+            "id": str(contract.get("id", key)).strip() or str(key),
+            "name": str(contract.get("name", key)).strip() or str(key),
+            "measurement_class": str(contract.get("measurement_class", "")).strip(),
+            "required_instruments": [str(x).strip() for x in (contract.get("required_instruments") or []) if str(x).strip()],
+            "result_fields": [str(x).strip() for x in (contract.get("result_fields") or []) if str(x).strip()],
+            "verdict_type": str(contract.get("verdict_type", "")).strip(),
+            "default_profile_ref": default_profile_ref,
+            "default_profile": str(contract.get("default_profile", "")).strip(),
+            "unit": str(contract.get("unit", "")).strip(),
+            "unit_source": str(contract.get("unit_source", "informational_only")).strip() or "informational_only",
+            "policy_source": str(contract.get("policy_source", "")).strip(),
+            "editor_hint": str(contract.get("editor_hint", "")).strip(),
+            "apply_to_test_type": str(contract.get("apply_to_test_type", "")).strip().upper(),
+        }
+        for extra_key, extra_value in contract.items():
+            if extra_key not in normalized:
+                normalized[extra_key] = extra_value
+        out[str(key)] = normalized
+    return out
+
+
+def normalize_case_dimensions(raw: Dict[str, Any] | None) -> Dict[str, Any]:
+    data = dict(raw or {})
+    base = [str(x).strip() for x in (data.get("base") or []) if str(x).strip()]
+    optional_axes: List[Dict[str, str]] = []
+    for item in (data.get("optional_axes") or []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        policy_ref = str(item.get("policy_ref", "")).strip()
+        if not name:
+            continue
+        optional_axes.append({"name": name, "policy_ref": policy_ref})
+    if not base:
+        base = ["test_type", "band", "standard", "bw", "channel"]
+    if not optional_axes:
+        optional_axes = [
+            {"name": "voltage", "policy_ref": "voltage_policy"},
+            {"name": "data_rate", "policy_ref": "data_rate_policy"},
+        ]
+    return {
+        "base": base,
+        "optional_axes": optional_axes,
+    }
+
+
 def normalize_voltage_policy(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     data = dict(raw or {})
     levels_raw = list(data.get("levels") or [])
@@ -152,6 +302,7 @@ class BandInfo:
     psd_limit_value: Optional[float] = None
     psd_limit_unit: Optional[str] = None
     psd: Optional[Dict[str, Any]] = None
+    psd_policy: Optional[Dict[str, Any]] = None
     psd_by_device_class: Optional[Dict[str, Dict[str, Any]]] = None
 
     @staticmethod
@@ -183,6 +334,7 @@ class BandInfo:
         psd_raw = d.get("psd", {}) or {}
         if not isinstance(psd_raw, dict):
             raise TypeError(f"BandInfo '{band}'.psd must be dict, got {type(psd_raw)}")
+        psd_policy = normalize_psd_policy(d)
 
         psd_by_device_class_raw = d.get("psd_by_device_class", {}) or {}
         if not isinstance(psd_by_device_class_raw, dict):
@@ -208,11 +360,12 @@ class BandInfo:
             tests_supported=[str(x) for x in tests_supported],
             channel_groups=channel_groups,
             device_classes=[str(x) for x in device_classes] if device_classes is not None else None,
-            psd_result_unit=str(d.get("psd_result_unit", "")).strip() or None,
-            psd_method=str(psd_raw.get("method", d.get("psd_method", ""))).strip() or None,
-            psd_limit_value=limit_value,
-            psd_limit_unit=str(psd_raw.get("limit_unit", d.get("psd_limit_unit", ""))).strip() or None,
+            psd_result_unit=psd_policy.get("result_unit") or None,
+            psd_method=psd_policy.get("method") or None,
+            psd_limit_value=psd_policy.get("limit", {}).get("value", limit_value),
+            psd_limit_unit=psd_policy.get("limit", {}).get("unit") or None,
             psd=dict(psd_raw),
+            psd_policy=dict(psd_policy),
             psd_by_device_class=psd_by_device_class,
         )
 
@@ -256,13 +409,17 @@ class PlanMode:
 class RuleSet:
     id: str
     version: str
+    schema_version: int
     regulation: str
     tech: str
     bands: Dict[str, BandInfo]
     instrument_profiles: Dict[str, InstrumentProfile]
+    instrument_profile_refs: Dict[str, str]
     plan_modes: Dict[str, PlanMode]
+    test_contracts: Dict[str, Dict[str, Any]]
     voltage_policy: Dict[str, Any]
     data_rate_policy: Dict[str, Any]
+    case_dimensions: Dict[str, Any]
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "RuleSet":
@@ -294,14 +451,24 @@ class RuleSet:
             raise TypeError(f"RuleSet.plan_modes must be dict, got {type(pm_raw)}")
         plan_modes = {str(k): PlanMode.from_dict(v) for k, v in pm_raw.items()}
 
+        test_contracts = normalize_test_contracts(d.get("test_contracts") or {})
+        instrument_profile_refs = normalize_instrument_profile_refs(
+            d.get("instrument_profile_refs") or {},
+            test_contracts=test_contracts,
+        )
+
         return RuleSet(
             id=rs_id,
             version=str(d.get("version", "")).strip(),
+            schema_version=int(d.get("schema_version", 1) or 1),
             regulation=str(d.get("regulation", "")).strip(),
             tech=str(d.get("tech", "")).strip(),
             bands=bands,
             instrument_profiles=instrument_profiles,
+            instrument_profile_refs=instrument_profile_refs,
             plan_modes=plan_modes,
+            test_contracts=test_contracts,
             voltage_policy=normalize_voltage_policy(d.get("voltage_policy") or {}),
             data_rate_policy=normalize_data_rate_policy(d.get("data_rate_policy") or {}),
+            case_dimensions=normalize_case_dimensions(d.get("case_dimensions") or {}),
         )

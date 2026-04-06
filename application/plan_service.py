@@ -7,7 +7,13 @@ from domain.models import (
     InstrumentProfile, Match, OverrideRule, Preset, Recipe, RuleSet, TestCase
 )
 from domain.expand import build_recipe, expand_recipe
-from domain.ruleset_models import normalize_data_rate_policy, normalize_voltage_policy
+from domain.ruleset_models import (
+    normalize_case_dimensions,
+    normalize_data_rate_policy,
+    normalize_instrument_profile_refs,
+    normalize_test_contracts,
+    normalize_voltage_policy,
+)
 from domain.overrides import apply_overrides
 from infrastructure.plan_repo_sqlite import PlanRepositorySQLite
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
@@ -71,12 +77,18 @@ class PlanService:
             regulation=raw.get("regulation", ""),
             tech=raw.get("tech", ""),
             bands=bands,                    # <- 변경됨 (BandInfo dict)
+            schema_version=int(raw.get("schema_version", 1) or 1),
             instrument_profiles=ips,
+            instrument_profile_refs=normalize_instrument_profile_refs(
+                raw.get("instrument_profile_refs") or {},
+                test_contracts=raw.get("test_contracts") or {},
+            ),
             plan_modes=plan_modes,          # <- 변경됨 (PlanMode dict)
-            test_contracts=dict(raw.get("test_contracts", {}) or {}),
+            test_contracts=normalize_test_contracts(raw.get("test_contracts") or {}),
             test_labels={str(k): str(v) for k, v in (raw.get("test_labels", {}) or {}).items()},
             voltage_policy=normalize_voltage_policy(raw.get("voltage_policy") or {}),
             data_rate_policy=normalize_data_rate_policy(raw.get("data_rate_policy") or {}),
+            case_dimensions=normalize_case_dimensions(raw.get("case_dimensions") or {}),
         )
 
         self._ruleset_cache[ruleset_id] = rs
