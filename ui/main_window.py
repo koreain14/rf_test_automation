@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtGui import QAction, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QComboBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
     QToolBar, QVBoxLayout, QWidget, QTabWidget, QProgressBar
@@ -28,6 +28,9 @@ from ui.main_window_support import (
     MainWindowProjectHelper,
     MainWindowRuntimeHelper,
 )
+from ui.main_window_plan_facade import MainWindowPlanFacade
+from ui.main_window_run_facade import MainWindowRunFacade
+from ui.main_window_scenario_facade import MainWindowScenarioFacade
 from ui.tabs.compare_tab import CompareTab
 from ui.tabs.results_tab import ResultsTab
 from ui.tabs.plan_tab import PlanTab
@@ -124,6 +127,9 @@ class MainWindow(QMainWindow):
         self._run_controller = RunController(self)
         self._scenario_controller = ScenarioController(self)
         self._plan_controller = PlanController(self)
+        self._plan_facade = MainWindowPlanFacade(self)
+        self._run_facade = MainWindowRunFacade(self)
+        self._scenario_facade = MainWindowScenarioFacade(self)
 
         self._build_ui()
         self._load_initial_data()
@@ -167,6 +173,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         tabs = QTabWidget()
+        self._build_tools_menu()
 
         # shared toolbar widgets
         self.project_combo = QComboBox()
@@ -174,6 +181,7 @@ class MainWindow(QMainWindow):
         self.profile_combo = QComboBox()
         self.btn_refresh_profiles = QPushButton("Refresh Profiles")
         self.btn_preset_editor = QPushButton("Preset Editor")
+        self.btn_ruleset_axis_editor = QPushButton("Ruleset Axis")
 
         self.btn_start = QPushButton("Run Plan")
         self.btn_start.setToolTip("현재 선택된 plan의 전체 runnable 케이스를 실행합니다")
@@ -185,6 +193,7 @@ class MainWindow(QMainWindow):
         self.btn_power = QPushButton("Power")
         self.btn_motion = QPushButton("Motion")
         self.btn_dut_control = QPushButton("DUT Control")
+        self.btn_correction = QPushButton("Correction")
         self.btn_plan_summary = QPushButton("Plan Summary")
 
         self.btn_add_plan = QPushButton("Add Plan")
@@ -223,12 +232,14 @@ class MainWindow(QMainWindow):
         self.btn_power.clicked.connect(self.on_edit_power_settings)
         self.btn_motion.clicked.connect(self.on_edit_motion_settings)
         self.btn_dut_control.clicked.connect(self.on_edit_dut_control_mode)
+        self.btn_correction.clicked.connect(self.on_edit_correction_settings)
         self.btn_plan_summary.clicked.connect(self.on_show_plan_summary)
 
         self.project_combo.currentIndexChanged.connect(self.on_project_changed)
         self.preset_combo.currentIndexChanged.connect(self.on_preset_changed)
         self.btn_refresh_profiles.clicked.connect(self._reload_equipment_profiles)
         self.btn_preset_editor.clicked.connect(self.on_open_preset_editor)
+        self.btn_ruleset_axis_editor.clicked.connect(self.on_open_ruleset_axis_editor)
 
         self.btn_add_plan.clicked.connect(self.on_add_plan)
         self.btn_remove_plan.clicked.connect(self.on_remove_plan_from_scenario)
@@ -308,6 +319,12 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(tabs)
 
+    def _build_tools_menu(self) -> None:
+        menu = self.menuBar().addMenu("Tools")
+        self.action_open_ruleset_axis_editor = QAction("Ruleset Axis Editor", self)
+        self.action_open_ruleset_axis_editor.triggered.connect(self.on_open_ruleset_axis_editor)
+        menu.addAction(self.action_open_ruleset_axis_editor)
+
     def _build_run_toolbar(self):
         toolbar = QToolBar("Run")
         toolbar.setObjectName("run_toolbar")
@@ -338,6 +355,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.profile_combo)
         toolbar.addWidget(self.btn_refresh_profiles)
         toolbar.addWidget(self.btn_preset_editor)
+        toolbar.addWidget(self.btn_ruleset_axis_editor)
 
     def _build_plan_toolbar(self):
         toolbar = QToolBar("Plan")
@@ -355,6 +373,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.btn_power)
         toolbar.addWidget(self.btn_motion)
         toolbar.addWidget(self.btn_dut_control)
+        toolbar.addWidget(self.btn_correction)
         toolbar.addWidget(self.btn_plan_summary)
     def _save_instrument_settings(self, settings: Dict[str, Any]) -> None:
         self.settings_store.save_instrument_settings(settings)
@@ -408,7 +427,7 @@ class MainWindow(QMainWindow):
         self._project_helper.reload_presets(project_id, select_preset_id)
 
     def on_reload_plan(self):
-        self._plan_controller.reload_plan()
+        self._plan_facade.on_reload_plan()
 
     def on_project_changed(self, _idx: int):
         self._project_helper.handle_project_changed(_idx)
@@ -419,20 +438,23 @@ class MainWindow(QMainWindow):
     def on_open_preset_editor(self):
         self._project_helper.open_preset_editor()
 
+    def on_open_ruleset_axis_editor(self):
+        self._project_helper.open_ruleset_axis_editor()
+
     def on_add_plan(self):
-        self._plan_controller.add_plan()
+        self._plan_facade.on_add_plan()
 
     def _effective_test_order(self, ctx: PlanContext) -> list[str]:
-        return self._plan_controller.effective_test_order(ctx)
+        return self._plan_facade.effective_test_order(ctx)
 
     def _append_plan_to_tree(self, plan_id: str, ctx: PlanContext) -> QStandardItem:
-        return self._plan_controller.append_plan_to_tree(plan_id, ctx)
+        return self._plan_facade.append_plan_to_tree(plan_id, ctx)
 
     def _refresh_plan_tree_order_only(self, plan_id: str, selected_test_type: str | None = None) -> bool:
-        return self._plan_controller.refresh_plan_tree_order_only(plan_id, selected_test_type)
+        return self._plan_facade.refresh_plan_tree_order_only(plan_id, selected_test_type)
 
     def _clear_cases_view(self):
-        self._plan_controller.clear_cases_view()
+        self._plan_facade.clear_cases_view()
 
     def _legacy__get_selected_result_filters(self) -> dict:
         return {
@@ -480,64 +502,59 @@ class MainWindow(QMainWindow):
         return filtered
 
     def _current_plan_id(self) -> str | None:
-        return self._plan_controller.current_plan_id()
+        return self._plan_facade.current_plan_id()
 
     def _find_plan_item(self, plan_id: str):
-        return self._plan_controller.find_plan_item(plan_id)
+        return self._plan_facade.find_plan_item(plan_id)
 
     def _remove_plan_item_from_tree(self, plan_id: str) -> bool:
-        return self._plan_controller.remove_plan_item_from_tree(plan_id)
+        return self._plan_facade.remove_plan_item_from_tree(plan_id)
 
     def on_remove_plan_from_scenario(self):
-        self._plan_controller.remove_plan_from_scenario()
+        self._plan_facade.on_remove_plan_from_scenario()
 
     def on_tree_clicked(self, index):
-        self._plan_controller.tree_clicked(index)
+        self._plan_facade.on_tree_clicked(index)
 
     def _select_tree_node(self, item: QStandardItem):
-        self._plan_controller.select_tree_node(item)
+        self._plan_facade.select_tree_node(item)
 
     def _load_page(self):
-        self._plan_controller.load_page()
+        self._plan_facade.load_page()
 
     def on_load_more(self):
-        self._plan_controller.load_more()
+        self._plan_facade.on_load_more()
 
     def on_skip_selected(self):
-        self._plan_controller.skip_selected()
+        self._plan_facade.on_skip_selected()
 
     def _on_run_progress(self, count: int, last_status: str, case_info=None):
-        self._run_controller.handle_run_progress(count, last_status, case_info)
+        self._run_facade.on_run_progress(count, last_status, case_info)
     def _on_scenario_run_progress(self, processed: int, total: int, preset_name: str, last_status: str):
-        self._run_controller.handle_scenario_run_progress(processed, total, preset_name, last_status)
+        self._run_facade.on_scenario_run_progress(processed, total, preset_name, last_status)
     def on_start_run(self):
-        self._run_controller.start_run()
+        self._run_facade.on_start_run()
     def on_start_scenario_run(self):
-        self._run_controller.start_scenario_run()
+        self._run_facade.on_start_scenario_run()
     def on_refresh_runs(self):
-        if hasattr(self, "results_widget"):
-            self.results_widget.refresh_runs()
+        self._run_facade.on_refresh_runs()
 
     def on_load_results(self):
-        if hasattr(self, "results_widget"):
-            self.results_widget.load_results()
+        self._run_facade.on_load_results()
 
     def on_export_results_csv(self):
-        if hasattr(self, "results_widget"):
-            self.results_widget.export_results_csv()
+        self._run_facade.on_export_results_csv()
 
     def on_export_results_excel(self):
-        if hasattr(self, "results_widget"):
-            self.results_widget.export_results_excel()
+        self._run_facade.on_export_results_excel()
 
     def _update_result_quick_buttons_style(self):
-        if hasattr(self, "results_widget") and hasattr(self.results_widget, "_update_result_quick_buttons_style"):
-            self.results_widget._update_result_quick_buttons_style()
+        self._run_facade.update_result_quick_buttons_style()
 
     def _on_run_finished(self, final_status: str, run_id: str, error_text: str):
-        self._run_controller.handle_run_finished(final_status, run_id, error_text)
+        self._run_facade.on_run_finished(final_status, run_id, error_text)
     def _on_scenario_run_finished(self, final_status: str, summaries: list, error_text: str):
-        self._run_controller.handle_scenario_run_finished(final_status, summaries, error_text)
+        self._run_facade.on_scenario_run_finished(final_status, summaries, error_text)
 
     def _build_dut_change_dialog_text(self, payload: dict) -> str:
         current = dict(payload.get("current") or {})
@@ -633,36 +650,42 @@ class MainWindow(QMainWindow):
             worker = self._scenario_worker
         self._show_dut_change_prompt(dict(payload or {}), worker)
     def on_stop_run(self):
-        self._run_controller.stop_run()
+        self._run_facade.on_stop_run()
     def on_edit_execution_order(self):
-        self._plan_controller.edit_execution_order()
+        self._plan_facade.on_edit_execution_order()
 
     def _current_switch_path(self) -> str | None:
-        return self._plan_controller.current_switch_path()
+        return self._plan_facade.current_switch_path()
 
     def on_edit_rf_path(self):
-        self._plan_controller.edit_rf_path()
+        self._plan_facade.on_edit_rf_path()
 
     def _current_power_settings(self) -> dict:
-        return self._plan_controller.current_power_settings()
+        return self._plan_facade.current_power_settings()
 
     def on_edit_power_settings(self):
-        self._plan_controller.edit_power_settings()
+        self._plan_facade.on_edit_power_settings()
 
     def _current_motion_settings(self) -> dict:
-        return self._plan_controller.current_motion_settings()
+        return self._plan_facade.current_motion_settings()
 
     def _current_dut_control_mode(self) -> str:
-        return self._plan_controller.current_dut_control_mode()
+        return self._plan_facade.current_dut_control_mode()
 
     def on_edit_motion_settings(self):
-        self._plan_controller.edit_motion_settings()
+        self._plan_facade.on_edit_motion_settings()
 
     def on_edit_dut_control_mode(self):
-        self._plan_controller.edit_dut_control_mode()
+        self._plan_facade.on_edit_dut_control_mode()
+
+    def _current_correction_settings(self) -> dict:
+        return self._plan_facade.current_correction_settings()
+
+    def on_edit_correction_settings(self):
+        self._plan_facade.on_edit_correction_settings()
 
     def _build_plan_control_summary(self) -> str:
-        return self._plan_controller.build_plan_control_summary()
+        return self._plan_facade.build_plan_control_summary()
 
     def _validate_current_plan_controls(self, plan_id: str | None = None) -> tuple[bool, str]:
         target_plan_id = plan_id or self._current_plan_node_id
@@ -674,39 +697,22 @@ class MainWindow(QMainWindow):
         return result.ok, result.first_error()
 
     def on_show_plan_summary(self):
-        self._plan_controller.show_plan_summary()
+        self._plan_facade.on_show_plan_summary()
 
     def on_create_rerun(self):
-        if not self._last_run_id:
-            QMessageBox.information(self, "No run", "Run first to generate FAIL-based re-run.")
-            return
-        if not self._current_plan_node_id:
-            return
-        ctx = self._plans[self._current_plan_node_id]
-
-        try:
-            new_preset_id = self.svc.create_rerun_preset_from_fail(
-                project_id=ctx.project_id,
-                base_preset_id=ctx.preset_id,
-                run_id=self._last_run_id
-            )
-            QMessageBox.information(self, "Re-run preset created", f"New preset created.\nPreset ID: {new_preset_id}")
-            # preset 콤보 갱신
-            self._reload_presets(ctx.project_id, select_preset_id=new_preset_id)
-        except Exception as e:
-            QMessageBox.warning(self, "Re-run failed", str(e))
+        self._run_facade.on_create_rerun()
     
        
     def _scenario_plan_ids_in_tree_order(self) -> list[str]:
-        return self._scenario_controller.scenario_plan_ids_in_tree_order()
+        return self._scenario_facade.scenario_plan_ids_in_tree_order()
     def _clear_scenario_internal(self):
-        self._scenario_controller.clear_scenario_internal()
+        self._scenario_facade.clear_scenario_internal()
     def on_save_scenario(self):
-        self._scenario_controller.save_scenario()
+        self._scenario_facade.on_save_scenario()
     def on_load_scenario(self):
-        self._scenario_controller.load_scenario()
+        self._scenario_facade.on_load_scenario()
     def on_clear_scenario(self):
-        self._scenario_controller.clear_scenario()
+        self._scenario_facade.on_clear_scenario()
     def _legacy_on_results_show_all(self):
         self.result_filter_status.setCurrentText("ALL")
         self._update_result_quick_buttons_style()
@@ -725,13 +731,13 @@ class MainWindow(QMainWindow):
 
 
     def on_apply_plan_filter(self):
-        self._plan_controller.apply_filter()
+        self._plan_facade.on_apply_plan_filter()
 
     def on_clear_plan_filter(self):
-        self._plan_controller.clear_filter()
+        self._plan_facade.on_clear_plan_filter()
 
     def on_group_drilldown(self, *args):
-        self._plan_controller.drill_down_selected_group()
+        self._plan_facade.on_group_drilldown(*args)
 
     def on_run_filtered(self):
-        self._plan_controller.run_filtered()
+        self._plan_facade.on_run_filtered()

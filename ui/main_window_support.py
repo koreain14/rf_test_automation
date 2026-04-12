@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from PySide6.QtWidgets import QMessageBox
@@ -267,3 +269,45 @@ class MainWindowProjectHelper:
                 new_names = sorted(set(after.values()) - set(before.values()))
                 if new_names:
                     self.window.statusBar().showMessage(f"Imported presets: {', '.join(new_names)}", 5000)
+
+    def open_ruleset_axis_editor(self) -> None:
+        from ui.dialogs import RulesetAxisEditorDialog
+
+        ruleset_id = self._resolve_current_ruleset_id()
+        raw = self._load_ruleset_json(ruleset_id)
+        if not raw:
+            QMessageBox.warning(
+                self.window,
+                "Ruleset Axis Editor",
+                f"Could not load ruleset JSON for '{ruleset_id}'.",
+            )
+            return
+        dlg = RulesetAxisEditorDialog(ruleset_data=raw, parent=self.window)
+        dlg.exec()
+
+    def _resolve_current_ruleset_id(self) -> str:
+        preset_id = getattr(self.window, "preset_id", None)
+        if preset_id:
+            try:
+                preset = self.window.svc.load_preset_obj(preset_id)
+                if getattr(preset, "ruleset_id", ""):
+                    return str(preset.ruleset_id)
+            except Exception:
+                pass
+        return "KC_WLAN"
+
+    def _load_ruleset_json(self, ruleset_id: str) -> dict:
+        normalized = str(ruleset_id or "").strip()
+        if not normalized:
+            return {}
+        path = Path(getattr(self.window.svc, "ruleset_dir", Path("rulesets"))) / f"{normalized.lower()}.json"
+        if not path.exists() and normalized.upper() == "KC_WLAN":
+            alt = Path(getattr(self.window.svc, "ruleset_dir", Path("rulesets"))) / "kc_wlan.json"
+            if alt.exists():
+                path = alt
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}

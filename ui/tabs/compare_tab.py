@@ -1,11 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import csv
 import logging
 from typing import Callable, Dict, List
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
@@ -25,21 +22,21 @@ from PySide6.QtWidgets import (
 )
 
 from application.result_difference import format_difference, format_difference_value, format_numeric_value
-from ui.workers.results_task_worker import ResultsTaskWorker
+from ui.tabs.result_export_helper import ResultExportHelper
+from ui.tabs.result_task_tab_base import ResultTaskTabBase
 
 
 log = logging.getLogger(__name__)
 
 
-class CompareTab(QWidget):
+class CompareTab(QWidget, ResultTaskTabBase):
     def __init__(self, service, get_project_id: Callable[[], str | None], parent=None):
         super().__init__(parent)
         self.svc = service
         self.get_project_id = get_project_id
         self._last_compare_rows: List[Dict] = []
-        self._task_worker: ResultsTaskWorker | None = None
-        self._task_generation = 0
-        self._busy_action = ""
+        self._export_helper = ResultExportHelper()
+        self._init_result_task_support()
         self._build_ui()
 
     def refresh_runs(self) -> None:
@@ -52,8 +49,7 @@ class CompareTab(QWidget):
         self.lbl_compare_summary.setText("No comparison loaded")
 
     def reset_view(self) -> None:
-        self._task_generation += 1
-        self._task_worker = None
+        self._cancel_pending_tasks()
         self.compare_run_a.blockSignals(True)
         self.compare_run_b.blockSignals(True)
         self.compare_run_a.clear()
@@ -197,47 +193,12 @@ class CompareTab(QWidget):
         self.compare_delta_threshold.returnPressed.connect(self.on_load_compare)
         self.compare_table.selectionModel().selectionChanged.connect(self.on_compare_selection_changed)
 
-    def _set_busy(self, busy: bool, action: str = "") -> None:
-        self._busy_action = action if busy else ""
+    def _set_busy_impl(self, busy: bool, action: str = "") -> None:
         self.btn_refresh_compare_runs.setEnabled(not busy)
         self.btn_load_compare.setEnabled(not busy)
         self.btn_export_compare_csv.setEnabled(not busy)
         self.btn_export_compare_excel.setEnabled(not busy)
         self.chk_compare_changes_only.setEnabled(not busy)
-
-    def _finish_worker(self, worker: ResultsTaskWorker) -> None:
-        if self._task_worker is worker:
-            self._task_worker = None
-        worker.deleteLater()
-        self._set_busy(False)
-
-    def _start_task(self, *, action: str, task, on_success, error_title: str) -> None:
-        if self._task_worker is not None and self._task_worker.isRunning():
-            log.info("compare task skipped | busy_action=%s next_action=%s", self._busy_action, action)
-            return
-
-        self._task_generation += 1
-        generation = self._task_generation
-        worker = ResultsTaskWorker(task)
-        self._task_worker = worker
-        self._set_busy(True, action=action)
-
-        def _handle_success(payload) -> None:
-            self._finish_worker(worker)
-            if generation != self._task_generation:
-                return
-            on_success(payload)
-
-        def _handle_failure(error_text: str) -> None:
-            self._finish_worker(worker)
-            if generation != self._task_generation:
-                return
-            log.error("compare task failed | action=%s\n%s", action, error_text)
-            QMessageBox.critical(self, error_title, error_text)
-
-        worker.succeeded.connect(_handle_success)
-        worker.failed.connect(_handle_failure)
-        worker.start()
 
     def _fill_run_combo(self, combo: QComboBox, runs: List[Dict]) -> None:
         current = combo.currentData()
@@ -500,6 +461,7 @@ class CompareTab(QWidget):
             task=_task,
             on_success=_apply,
             error_title="Compare Failed",
+            log_prefix="compare task",
         )
 
     def on_compare_selection_changed(self, selected, deselected):
@@ -535,6 +497,8 @@ class CompareTab(QWidget):
             f"Difference B: {format_difference(row.get('difference_b'), row.get('difference_unit', ''))}",
             f"Limit A/B: {row.get('limit_a', '')} / {row.get('limit_b', '')}",
             f"Comparator A/B: {row.get('comparator_a', '')} / {row.get('comparator_b', '')}",
+            f"Correction Profile A/B: {row.get('correction_profile_name_a', '')} / {row.get('correction_profile_name_b', '')}",
+            f"Correction Path A/B: {row.get('correction_bound_path_a', '')} / {row.get('correction_bound_path_b', '')}",
             f"Screenshot A: {row.get('screenshot_path_a', '') or row.get('screenshot_abs_path_a', '') or '(none)'}",
             f"Screenshot B: {row.get('screenshot_path_b', '') or row.get('screenshot_abs_path_b', '') or '(none)'}",
         ]
@@ -544,18 +508,6 @@ class CompareTab(QWidget):
         if not self._last_compare_rows:
             raise ValueError("No compare rows loaded")
         return self._apply_compare_filters(list(self._last_compare_rows))
-
-    def _build_compare_export_row(self, row: Dict) -> Dict:
-        export_row = dict(row or {})
-        export_row["measured_a"] = format_numeric_value(export_row.get("measured_a"))
-        export_row["measured_b"] = format_numeric_value(export_row.get("measured_b"))
-        export_row["target_voltage_v_display"] = self._format_compare_voltage(export_row)
-        export_row["delta_display"] = format_difference_value(export_row.get("delta_value"))
-        export_row["difference_a_display"] = format_difference(export_row.get("difference_a"), export_row.get("difference_unit", ""))
-        export_row["difference_b_display"] = format_difference(export_row.get("difference_b"), export_row.get("difference_unit", ""))
-        export_row["screenshot_a"] = "Yes" if export_row.get("has_screenshot_a") else ""
-        export_row["screenshot_b"] = "Yes" if export_row.get("has_screenshot_b") else ""
-        return export_row
 
     def on_export_compare_csv(self):
         try:
@@ -568,38 +520,8 @@ class CompareTab(QWidget):
         if not path:
             return
 
-        cols = [
-            ("test_type", "Test"),
-            ("band", "Band"),
-            ("standard", "Standard"),
-            ("data_rate", "Data Rate"),
-            ("bw_mhz", "BW(MHz)"),
-            ("channel", "CH"),
-            ("voltage_condition", "Voltage Cond"),
-            ("target_voltage_v_display", "Voltage (V)"),
-            ("measured_a", "Run A"),
-            ("measured_b", "Run B"),
-            ("delta_display", "Delta"),
-            ("unit", "Unit"),
-            ("status_a", "Status A"),
-            ("status_b", "Status B"),
-            ("difference_a_display", "Difference A"),
-            ("difference_b_display", "Difference B"),
-            ("limit_a", "Limit A"),
-            ("limit_b", "Limit B"),
-            ("comparator_a", "Comparator A"),
-            ("comparator_b", "Comparator B"),
-            ("screenshot_a", "Screenshot A"),
-            ("screenshot_b", "Screenshot B"),
-        ]
-
         def _task():
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow([header for _, header in cols])
-                for row in rows:
-                    export_row = self._build_compare_export_row(row)
-                    writer.writerow([export_row.get(key, "") for key, _ in cols])
+            self._export_helper.write_compare_csv(path, rows)
             return {"path": path}
 
         def _done(payload: Dict) -> None:
@@ -610,6 +532,7 @@ class CompareTab(QWidget):
             task=_task,
             on_success=_done,
             error_title="Export Compare CSV Failed",
+            log_prefix="compare task",
         )
 
     def on_export_compare_excel(self):
@@ -623,74 +546,8 @@ class CompareTab(QWidget):
         if not path:
             return
 
-        cols = [
-            ("test_type", "Test"),
-            ("band", "Band"),
-            ("standard", "Standard"),
-            ("data_rate", "Data Rate"),
-            ("bw_mhz", "BW(MHz)"),
-            ("channel", "CH"),
-            ("voltage_condition", "Voltage Cond"),
-            ("target_voltage_v_display", "Voltage (V)"),
-            ("measured_a", "Run A"),
-            ("measured_b", "Run B"),
-            ("delta_display", "Delta"),
-            ("unit", "Unit"),
-            ("status_a", "Status A"),
-            ("status_b", "Status B"),
-            ("difference_a_display", "Difference A"),
-            ("difference_b_display", "Difference B"),
-            ("limit_a", "Limit A"),
-            ("limit_b", "Limit B"),
-            ("comparator_a", "Comparator A"),
-            ("comparator_b", "Comparator B"),
-            ("screenshot_a", "Screenshot A"),
-            ("screenshot_b", "Screenshot B"),
-        ]
-
-        red_fill = PatternFill(fill_type="solid", fgColor="7B1F1F")
-        green_fill = PatternFill(fill_type="solid", fgColor="1B5E20")
-        amber_fill = PatternFill(fill_type="solid", fgColor="78350F")
-        gray_fill = PatternFill(fill_type="solid", fgColor="374151")
-        header_font = Font(bold=True)
-        light_font = Font(color="FFFFFF")
-
         def _task():
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Compare"
-
-            for col_index, (_, header) in enumerate(cols, start=1):
-                cell = ws.cell(row=1, column=col_index, value=header)
-                cell.font = header_font
-                cell.alignment = Alignment(vertical="center")
-
-            for row_index, row in enumerate(rows, start=2):
-                export_row = self._build_compare_export_row(row)
-                for col_index, (key, _) in enumerate(cols, start=1):
-                    ws.cell(row=row_index, column=col_index, value=export_row.get(key, ""))
-
-                fill = None
-                status_a = str(export_row.get("status_a", ""))
-                status_b = str(export_row.get("status_b", ""))
-                if status_a == "PASS" and status_b == "FAIL":
-                    fill = red_fill
-                elif status_a == "FAIL" and status_b == "PASS":
-                    fill = green_fill
-                elif export_row.get("changed"):
-                    fill = amber_fill
-                elif "MISSING" in (status_a, status_b):
-                    fill = gray_fill
-
-                if fill is not None:
-                    for col_index in range(1, len(cols) + 1):
-                        ws.cell(row=row_index, column=col_index).fill = fill
-                        ws.cell(row=row_index, column=col_index).font = light_font
-
-            widths = [12, 10, 14, 12, 10, 8, 16, 12, 14, 14, 16, 12, 12, 12, 16, 16, 12, 12, 14, 14, 12, 12]
-            for col_index, width in enumerate(widths, start=1):
-                ws.column_dimensions[ws.cell(row=1, column=col_index).column_letter].width = width
-            wb.save(path)
+            self._export_helper.write_compare_excel(path, rows)
             return {"path": path}
 
         def _done(payload: Dict) -> None:
@@ -701,6 +558,7 @@ class CompareTab(QWidget):
             task=_task,
             on_success=_done,
             error_title="Export Compare Excel Failed",
+            log_prefix="compare task",
         )
 
     def _as_sortable_number(self, value) -> float:

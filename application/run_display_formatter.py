@@ -75,5 +75,6 @@ def build_plan_summary_lines(preset_name: str, meta: dict | None, execution_orde
         f"Antenna: {ctx['antenna'] or '(None)'}\n"
         f"Power: {ctx['power_text'] or '(Default)'}\n"
         f"Motion: {ctx['motion_text'] or '(Default)'}\n"
-        f"DUT Control: {ctx.get('dut_control_mode_text') or 'MANUAL'}"
+        f"DUT Control: {ctx.get('dut_control_mode_text') or 'MANUAL'}\n"
+        f"Correction: {ctx.get('correction_text') or '(Disabled)'}"
     )

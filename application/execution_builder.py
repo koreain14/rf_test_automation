@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 from uuid import uuid4
 
@@ -10,6 +11,9 @@ from application.test_type_symbols import (
     required_capabilities_for_test_type,
 )
 from domain.execution import MeasurementStep
+
+
+log = logging.getLogger(__name__)
 
 
 class ExecutionBuilder:
@@ -42,6 +46,7 @@ class ExecutionBuilder:
                 "test_key": str(case.get("key", "")),
                 "measurement_profile_name": str((case.get("tags") or {}).get("measurement_profile_name", "")),
                 "measurement_profile_ref_source": str((case.get("tags") or {}).get("measurement_profile_ref_source", "")),
+                "measurement_profile_precedence": str((case.get("tags") or {}).get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot")),
                 "psd_result_unit": str((case.get("tags") or {}).get("psd_result_unit", "")),
                 "psd_method": str((case.get("tags") or {}).get("psd_method", "")),
                 "psd_limit_value": (case.get("tags") or {}).get("psd_limit_value"),
@@ -53,7 +58,19 @@ class ExecutionBuilder:
                 "voltage_condition": str((case.get("tags") or {}).get("voltage_condition", "")),
                 "nominal_voltage_v": (case.get("tags") or {}).get("nominal_voltage_v"),
                 "target_voltage_v": (case.get("tags") or {}).get("target_voltage_v"),
+                "axis_values": dict((case.get("tags") or {}).get("axis_values", {}) or {}),
+                "axis_order": list((case.get("tags") or {}).get("axis_order", []) or []),
             },
+        )
+        log.info(
+            "execution_builder case model | case_id=%s test_type=%s standard=%s voltage=%s target_voltage_v=%s data_rate=%s axis_values=%s",
+            self._case_id(case),
+            test_type,
+            str(case.get("standard", "")),
+            str((case.get("tags") or {}).get("voltage_condition", "")),
+            (case.get("tags") or {}).get("target_voltage_v"),
+            str((case.get("tags") or {}).get("data_rate", "")),
+            dict((case.get("tags") or {}).get("axis_values", {}) or {}),
         )
         return [step]
 
@@ -94,6 +111,7 @@ class ExecutionBuilder:
             "phy_mode": case.get("phy_mode", ""),
             "data_rate": (case.get("tags") or {}).get("data_rate", ""),
             "measurement_profile_ref_source": (case.get("tags") or {}).get("measurement_profile_ref_source", ""),
+            "measurement_profile_precedence": (case.get("tags") or {}).get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot"),
             "bandwidth_mhz": self._safe_int(case.get("bandwidth_mhz") or case.get("bw_mhz")),
             "channel": self._safe_int(case.get("channel")),
             "frequency_mhz": self._safe_float(case.get("frequency_mhz") or case.get("center_freq_mhz")),
@@ -101,6 +119,7 @@ class ExecutionBuilder:
             "voltage_condition": (case.get("tags") or {}).get("voltage_condition", ""),
             "nominal_voltage_v": (case.get("tags") or {}).get("nominal_voltage_v"),
             "target_voltage_v": (case.get("tags") or {}).get("target_voltage_v"),
+            "axis_values": dict((case.get("tags") or {}).get("axis_values", {}) or {}),
         }
 
     def _required_capabilities(self, test_type: str) -> List[str]:

@@ -113,6 +113,18 @@ class BaseProcedure:
         return None
 
     def execute(self, ctx: CaseContext, inst: InstrumentSession, sink, result_id: str) -> dict:
+        log.info(
+            "procedure execute ctx | procedure=%s case=%s test_type=%s standard=%s data_rate=%s voltage_condition=%s nominal_voltage_v=%s target_voltage_v=%s axis_values=%s",
+            self.name,
+            getattr(ctx.case, "key", ""),
+            getattr(ctx.case, "test_type", ""),
+            ctx.values.get("standard", getattr(ctx.case, "standard", "")),
+            ctx.values.get("data_rate", ""),
+            ctx.values.get("voltage_condition", ""),
+            ctx.values.get("nominal_voltage_v"),
+            ctx.values.get("target_voltage_v"),
+            ctx.values.get("axis_values", {}),
+        )
         pre = self.precheck(ctx, inst)
         if pre is not None:
             sink.write(result_id, pre)
@@ -298,6 +310,7 @@ class PsdMeasureStep:
                     "backend_idn": idn,
                     "measurement_profile_name": resolved_profile.get("profile_name", ""),
                     "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                    "measurement_profile_precedence": resolved_profile.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot"),
                     "measurement_profile_span_source": "profile_or_generic_mock",
                     "trace_point_count": len(trace),
                     "verdict": "PASS" if margin >= 0 else "FAIL",
@@ -318,6 +331,7 @@ class PsdMeasureStep:
                     "source_class": source_class,
                     "measurement_profile_name": resolved_profile.get("profile_name", ""),
                     "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                    "measurement_profile_precedence": resolved_profile.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot"),
                 },
             )
 
@@ -333,6 +347,8 @@ class PsdMeasureStep:
             ctx.values["error_message"] = result.get("error_message")
         if result.get("measurement_profile_span_source"):
             ctx.values["measurement_profile_span_source"] = result.get("measurement_profile_span_source")
+        if result.get("measurement_profile_precedence"):
+            ctx.values["measurement_profile_precedence"] = result.get("measurement_profile_precedence")
         if result.get("scpi_trace_mode"):
             ctx.values["scpi_trace_mode"] = result.get("scpi_trace_mode")
         if result.get("scpi_detector"):
@@ -392,6 +408,7 @@ class PsdMeasureStep:
                 "backend_idn": result.get("backend_idn", idn),
                 "measurement_profile_name": resolved_profile.get("profile_name", ""),
                 "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "measurement_profile_precedence": result.get("measurement_profile_precedence", resolved_profile.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot")),
                 "measurement_profile_span_source": result.get("measurement_profile_span_source", ""),
                 "canonical_measurement_unit": result.get("canonical_measurement_unit", "dBm/MHz"),
                 "canonical_measured_value": result.get("canonical_measured_value"),
@@ -546,6 +563,7 @@ class ObwMeasureStep:
                     "backend_reason": reason,
                     "backend_idn": idn,
                     "source_class": source_class,
+                    "measurement_profile_precedence": resolved_profile.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot"),
                 },
             )
 
@@ -581,6 +599,7 @@ class ObwMeasureStep:
                 "backend_idn": result.get("backend_idn", idn),
                 "measurement_profile_name": resolved_profile.get("profile_name", ""),
                 "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "measurement_profile_precedence": resolved_profile.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot"),
                 "difference_value": result.get("difference_value"),
                 "difference_unit": result.get("difference_unit", result.get("measurement_unit", "")),
                 "comparator": result.get("comparator", "upper_limit"),

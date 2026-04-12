@@ -120,14 +120,20 @@ class RunRepositorySQLite:
           result_id, project_id, run_id,
           test_key, tech, regulation, band, standard, test_type, channel, bw_mhz,
           status, margin_db, measured_value, limit_value,
+          raw_measured_value, applied_correction_db, correction_profile_name, correction_mode, correction_bound_path, correction_breakdown_json,
           instrument_snapshot_json, tags_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             result_id, project_id, run_id,
             row["test_key"], row["tech"], row["regulation"], row["band"], row["standard"],
             row["test_type"], int(row["channel"]), int(row["bw_mhz"]),
             row["status"],
             row.get("margin_db"), row.get("measured_value"), row.get("limit_value"),
+            row.get("raw_measured_value"), row.get("applied_correction_db"),
+            str(row.get("correction_profile_name", "") or ""),
+            str(row.get("correction_mode", "") or ""),
+            str(row.get("correction_bound_path", "") or ""),
+            json.dumps(row.get("correction_breakdown", {}), ensure_ascii=False),
             json.dumps(row.get("instrument_snapshot", {}), ensure_ascii=False),
             json.dumps(row.get("tags", {}), ensure_ascii=False),
             now()
@@ -209,6 +215,12 @@ class RunRepositorySQLite:
             r.margin_db,
             r.measured_value,
             r.limit_value,
+            r.raw_measured_value,
+            r.applied_correction_db,
+            r.correction_profile_name,
+            r.correction_mode,
+            r.correction_bound_path,
+            r.correction_breakdown_json,
             r.test_key,
             r.tags_json,
             (
@@ -292,6 +304,33 @@ class RunRepositorySQLite:
                 or last.get("psd_method")
                 or ""
             )
+            if last.get("raw_measured_value") not in (None, ""):
+                r["raw_measured_value"] = last.get("raw_measured_value")
+            r["applied_correction_db"] = (
+                last.get("applied_correction_db")
+                if last.get("applied_correction_db") not in (None, "")
+                else r.get("applied_correction_db")
+            )
+            r["correction_profile_name"] = str(
+                last.get("correction_profile_name")
+                or r.get("correction_profile_name", "")
+                or ""
+            )
+            r["correction_mode"] = str(last.get("correction_mode") or r.get("correction_mode", "") or "")
+            r["correction_bound_path"] = str(
+                last.get("correction_bound_path")
+                or r.get("correction_bound_path", "")
+                or ""
+            )
+            breakdown_json = r.get("correction_breakdown_json") or ""
+            try:
+                breakdown = json.loads(breakdown_json) if breakdown_json else {}
+            except Exception:
+                breakdown = {}
+            if isinstance(last.get("correction_breakdown"), dict):
+                breakdown = dict(last.get("correction_breakdown") or {})
+            r["correction_breakdown"] = breakdown if isinstance(breakdown, dict) else {}
+            r["correction_applied"] = bool(last.get("correction_applied") or r.get("applied_correction_db") not in (None, "", 0, 0.0))
             r["screenshot_path"] = str(last.get("screenshot_path", "") or "")
             r["screenshot_abs_path"] = str(last.get("screenshot_abs_path", "") or "")
             r["has_screenshot"] = bool(r["screenshot_path"] or r["screenshot_abs_path"])
@@ -352,14 +391,16 @@ class RunRepositorySQLite:
           result_id, project_id, run_id,
           test_key, tech, regulation, band, standard, test_type, channel, bw_mhz,
           status, margin_db, measured_value, limit_value,
+          raw_measured_value, applied_correction_db, correction_profile_name, correction_mode, correction_bound_path, correction_breakdown_json,
           instrument_snapshot_json, tags_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             result_id, project_id, run_id,
             row["test_key"], row["tech"], row["regulation"], row["band"], row["standard"],
             row["test_type"], int(row["channel"]), int(row["bw_mhz"]),
             "RUNNING",
             None, None, None,
+            None, None, "", "", "", "",
             json.dumps(row.get("instrument_snapshot", {}), ensure_ascii=False),
             json.dumps(row.get("tags", {}), ensure_ascii=False),
             now()
@@ -384,6 +425,35 @@ class RunRepositorySQLite:
         SET status=?, margin_db=?, measured_value=?, limit_value=?
         WHERE result_id=?
         """, (status, margin_db, measured_value, limit_value, result_id))
+        conn.commit()
+        conn.close()
+
+    def update_result_correction_fields(self, result_id: str, correction_data: Dict[str, Any]) -> None:
+        payload = dict(correction_data or {})
+        breakdown = payload.get("correction_breakdown") or payload.get("breakdown") or {}
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE results
+            SET raw_measured_value=?,
+                applied_correction_db=?,
+                correction_profile_name=?,
+                correction_mode=?,
+                correction_bound_path=?,
+                correction_breakdown_json=?
+            WHERE result_id=?
+            """,
+            (
+                payload.get("raw_measured_value"),
+                payload.get("applied_correction_db"),
+                str(payload.get("correction_profile_name", "") or ""),
+                str(payload.get("correction_mode", "") or ""),
+                str(payload.get("correction_bound_path", "") or ""),
+                json.dumps(breakdown, ensure_ascii=False),
+                result_id,
+            ),
+        )
         conn.commit()
         conn.close()
 

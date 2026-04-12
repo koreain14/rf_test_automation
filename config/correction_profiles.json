@@ -1,0 +1,66 @@
+{
+  "profiles": [
+    {
+      "name": "WLAN_DIRECT_A",
+      "mode": "DIRECT",
+      "description": "WLAN conducted direct path sample",
+      "factors": {
+        "cable_loss_db": 1.2,
+        "attenuator_db": 10.0,
+        "dut_cable_loss_db": 0.3,
+        "switchbox_loss_db": 0.0,
+        "divider_loss_db": 0.0,
+        "external_gain_db": 9.0
+      },
+      "meta": {
+        "technology": "WLAN",
+        "scope": "conducted",
+        "sample": true
+      }
+    },
+    {
+      "name": "4T_SWITCH_A",
+      "mode": "SWITCH",
+      "description": "WLAN 4T switchbox sample",
+      "ports": {
+        "ANT1": {
+          "cable_loss_db": 1.2,
+          "attenuator_db": 10.0,
+          "dut_cable_loss_db": 0.3,
+          "switchbox_loss_db": 0.8,
+          "divider_loss_db": 0.5,
+          "external_gain_db": 9.0
+        },
+        "ANT2": {
+          "cable_loss_db": 1.4,
+          "attenuator_db": 10.0,
+          "dut_cable_loss_db": 0.4,
+          "switchbox_loss_db": 0.9,
+          "divider_loss_db": 0.5,
+          "external_gain_db": 9.0
+        },
+        "ANT3": {
+          "cable_loss_db": 1.1,
+          "attenuator_db": 10.0,
+          "dut_cable_loss_db": 0.2,
+          "switchbox_loss_db": 0.7,
+          "divider_loss_db": 0.5,
+          "external_gain_db": 9.0
+        },
+        "ANT4": {
+          "cable_loss_db": 1.3,
+          "attenuator_db": 10.0,
+          "dut_cable_loss_db": 0.3,
+          "switchbox_loss_db": 0.8,
+          "divider_loss_db": 0.5,
+          "external_gain_db": 9.0
+        }
+      },
+      "meta": {
+        "technology": "WLAN",
+        "scope": "conducted",
+        "sample": true
+      }
+    }
+  ]
+}

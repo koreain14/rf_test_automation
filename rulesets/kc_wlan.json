@@ -5,11 +5,46 @@
   "regulation": "KC",
   "tech": "WLAN",
   "case_dimensions": {
-    "base": ["test_type", "band", "standard", "bw", "channel"],
+    "base": ["test_type", "standard", "frequency_band", "bandwidth", "channel"],
     "optional_axes": [
       {"name": "voltage", "policy_ref": "voltage_policy"},
       {"name": "data_rate", "policy_ref": "data_rate_policy"}
-    ]
+    ],
+    "dimensions": {
+      "frequency_band": {
+        "type": "enum",
+        "source": "bands",
+        "maps_to": "band",
+        "values": ["2.4G", "5G", "6G"]
+      },
+      "standard": {
+        "type": "enum",
+        "source": "preset.standard_or_wlan_expansion",
+        "maps_to": "standard"
+      },
+      "bandwidth": {
+        "type": "numeric",
+        "source": "preset.bandwidth_mhz",
+        "maps_to": "bw_mhz"
+      },
+      "channel": {
+        "type": "numeric",
+        "source": "channel_groups",
+        "maps_to": "channel"
+      },
+      "data_rate": {
+        "type": "enum",
+        "source": "data_rate_policy",
+        "maps_to": "tags.data_rate",
+        "optional": true
+      },
+      "voltage": {
+        "type": "computed",
+        "source": "voltage_policy",
+        "maps_to": "tags.voltage_condition",
+        "optional": true
+      }
+    }
   },
   "bands": {
     "2.4G": {

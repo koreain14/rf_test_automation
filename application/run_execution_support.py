@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
+from application.correction_profile_loader import CorrectionProfileLoader
+from application.correction_runtime import apply_correction_to_result, format_correction_summary, normalize_correction_meta
 from application.execution_builder import ExecutionBuilder
 from application.executor_factory import ExecutorFactory
 from application.instrument_manager import InstrumentManager
@@ -100,6 +102,10 @@ class RunSessionCoordinator:
                 for test_type, profile in dict(getattr(recipe, "instrument_profile_by_test", {}) or {}).items()
             }
             run_meta["measurement_profile_source"] = "recipe.instrument_profile_by_test"
+            correction = normalize_correction_meta(getattr(recipe, "meta", {}) or {})
+            if correction.get("enabled"):
+                run_meta["correction"] = correction
+                run_meta["correction_text"] = format_correction_summary(getattr(recipe, "meta", {}) or {})
 
         return RunEnvironment(
             session=session,
@@ -617,6 +623,7 @@ class CaseExecutionPipeline:
         self.run_repo = run_repo
         self.metadata_recorder = metadata_recorder
         self.voltage_controller = VoltageConditionController(run_repo)
+        self.correction_loader = CorrectionProfileLoader()
 
     def create_runner(self, *, project_id: str) -> StepRunner:
         sink = StepResultSinkSQLite(self.run_repo, project_id)
@@ -673,13 +680,13 @@ class CaseExecutionPipeline:
             return False
         if previous_case is None:
             return True
-        return self.case_setup_key(previous_case) != self.case_setup_key(current_case)
+        return self.dut_reconfigure_key(previous_case) != self.dut_reconfigure_key(current_case)
 
     def build_dut_prompt_payload(self, previous_case, current_case, dut_control_mode: str) -> dict[str, Any]:
-        prev_key = self.case_setup_key(previous_case) if previous_case is not None else None
+        prev_key = self.dut_reconfigure_key(previous_case) if previous_case is not None else None
         previous_tags = dict(getattr(previous_case, "tags", {}) or {}) if previous_case is not None else {}
         current_tags = dict(getattr(current_case, "tags", {}) or {})
-        curr_key = self.case_setup_key(current_case)
+        curr_key = self.dut_reconfigure_key(current_case)
         previous = {
             "band": getattr(previous_case, "band", None) if previous_case is not None else None,
             "center_freq_mhz": getattr(previous_case, "center_freq_mhz", None) if previous_case is not None else None,
@@ -705,16 +712,8 @@ class CaseExecutionPipeline:
             instructions.append(f"Frequency: {current.get('center_freq_mhz')} MHz")
         if prev_key is None or previous.get("bw_mhz") != current.get("bw_mhz"):
             instructions.append(f"Bandwidth: {current.get('bw_mhz')} MHz")
-        if prev_key is None or previous.get("phy_mode") != current.get("phy_mode"):
-            instructions.append(f"Mode: {current.get('phy_mode') or current_case.standard}")
-        if prev_key is None or previous.get("data_rate") != current.get("data_rate"):
-            instructions.append(f"Data Rate: {current.get('data_rate') or '-'}")
         if prev_key is None or previous.get("band") != current.get("band"):
             instructions.append(f"Band: {current.get('band')}")
-        if prev_key is None or previous.get("voltage_condition") != current.get("voltage_condition"):
-            instructions.append(f"Voltage Condition: {current.get('voltage_condition') or '-'}")
-        if prev_key is None or previous.get("target_voltage_v") != current.get("target_voltage_v"):
-            instructions.append(f"Target Voltage: {current.get('target_voltage_v')} V")
         return {
             "dut_control_mode": dut_control_mode,
             "previous_setup_key": prev_key,
@@ -767,7 +766,23 @@ class CaseExecutionPipeline:
             equipment_profile_name=equipment_profile_name,
         )
         values = runner.run_case(run_id, result_id, case, inst)
-        verdict = self.metadata_recorder.update_final_result(result_id=result_id, values=values)
+        correction_meta = dict((getattr(recipe, "meta", {}) or {}).get("correction") or {})
+        correction_profile = self.correction_loader.get_profile(str(correction_meta.get("profile_name", "") or ""))
+        corrected_values, correction_trace = apply_correction_to_result(
+            values=values,
+            recipe_meta=getattr(recipe, "meta", {}) or {},
+            case=case,
+            profile=correction_profile,
+        )
+        verdict = self.metadata_recorder.update_final_result(result_id=result_id, values=corrected_values)
+        self.run_repo.update_result_correction_fields(result_id=result_id, correction_data=correction_trace)
+        self.run_repo.append_step_result(
+            project_id=project_id,
+            result_id=result_id,
+            step_name="CORRECTION_APPLY",
+            status="OK" if correction_trace.get("correction_applied") else "INFO",
+            data=correction_trace,
+        )
         return result_id, verdict
 
     def handle_reconfigure_prompt(
@@ -824,4 +839,11 @@ class CaseExecutionPipeline:
             str(tags.get("data_rate") or ""),
             str(tags.get("voltage_condition") or ""),
             float(tags.get("target_voltage_v", 0.0) or 0.0),
+        )
+
+    def dut_reconfigure_key(self, case) -> tuple:
+        return (
+            str(getattr(case, "band", "") or ""),
+            float(getattr(case, "center_freq_mhz", 0.0) or 0.0),
+            float(getattr(case, "bw_mhz", 0.0) or 0.0),
         )

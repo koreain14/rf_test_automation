@@ -12,273 +12,25 @@ from application.test_type_symbols import (
     normalize_test_type_map,
     normalize_test_type_symbol,
 )
+from .axis_resolvers import (
+    AxisResolverContext,
+    axis_core_field,
+    center_freq_mhz_from_channel_5g,
+    coerce_float,
+    coerce_int,
+    data_rate_key_suffix,
+    find_group_for_state,
+    normalize_rate_list,
+    pick_representatives_from_group,
+    resolve_axis_values,
+    resolve_data_rate_axis_for_test,
+    resolve_voltage_axis_for_test,
+    voltage_key_suffix,
+)
 from .models import InstrumentProfile, Preset, Recipe, RuleSet, TestCase
-from .ruleset_models import BandInfo, ChannelGroup, normalize_data_rate_policy, normalize_voltage_policy
+from .ruleset_models import BandInfo, normalize_data_rate_policy, normalize_voltage_policy
 
 log = logging.getLogger(__name__)
-
-
-def center_freq_mhz_from_channel_5g(ch: int) -> float:
-    return 5000 + 5 * ch
-
-
-def _coerce_float(value: Any) -> float | None:
-    try:
-        if value in (None, ""):
-            return None
-        return float(value)
-    except Exception:
-        return None
-
-
-def _coerce_int(value: Any, default: int = 0) -> int:
-    try:
-        if value in (None, ""):
-            return default
-        return int(value)
-    except Exception:
-        return default
-
-
-def _resolve_voltage_axis(recipe_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
-    policy = normalize_voltage_policy(recipe_meta.get("voltage_policy") or {})
-    nominal_voltage_v = _coerce_float(recipe_meta.get("nominal_voltage_v"))
-    if not bool(policy.get("enabled")):
-        return [{}]
-    if nominal_voltage_v is None or nominal_voltage_v <= 0:
-        return [{}]
-
-    levels = list(policy.get("levels") or [])
-    if not levels:
-        return [{}]
-
-    settle_time_ms = _coerce_int(policy.get("settle_time_ms"), 0)
-    axes: List[Dict[str, Any]] = []
-    for level in levels:
-        row = dict(level or {})
-        name = str(row.get("name", "")).strip().upper()
-        if not name:
-            continue
-        percent_offset = _coerce_float(row.get("percent_offset"))
-        percent_offset = 0.0 if percent_offset is None else float(percent_offset)
-        target_voltage_v = round(nominal_voltage_v * (1.0 + (percent_offset / 100.0)), 6)
-        axes.append(
-            {
-                "voltage_condition": name,
-                "voltage_condition_label": str(row.get("label", name)).strip() or name,
-                "nominal_voltage_v": nominal_voltage_v,
-                "target_voltage_v": target_voltage_v,
-                "voltage_percent_offset": percent_offset,
-                "voltage_settle_time_ms": settle_time_ms,
-            }
-        )
-    return axes or [{}]
-
-
-def _normalize_rate_list(values: Any) -> List[str]:
-    out: List[str] = []
-    seen: set[str] = set()
-    for item in (values or []):
-        name = str(item or "").strip().upper()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        out.append(name)
-    return out
-
-
-def _normalize_apply_to(values: Any) -> List[str]:
-    out: List[str] = []
-    seen: set[str] = set()
-    for item in (values or []):
-        name = normalize_test_type_symbol(item)
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        out.append(name)
-    return out
-
-
-def _resolve_voltage_axis_for_test(recipe_meta: Dict[str, Any], test_type: str) -> List[Dict[str, Any]]:
-    policy = normalize_voltage_policy(recipe_meta.get("voltage_policy") or {})
-    enabled = bool(policy.get("enabled"))
-    nominal_voltage_v = _coerce_float(recipe_meta.get("nominal_voltage_v"))
-    levels = list(policy.get("levels") or [])
-    apply_to = _normalize_apply_to(policy.get("apply_to"))
-    apply_to_defined = bool(policy.get("apply_to_defined"))
-    current_test_type = normalize_test_type_symbol(test_type)
-    applies = (not apply_to_defined) or (current_test_type in apply_to)
-
-    if not enabled:
-        return [
-            {
-                "voltage_policy_enabled": False,
-                "voltage_policy_active": False,
-                "voltage_policy_applied": False,
-                "voltage_policy_status": "disabled",
-                "voltage_policy_apply_to": list(apply_to),
-                "voltage_policy_apply_to_defined": apply_to_defined,
-            }
-        ]
-    if not applies:
-        return [
-            {
-                "voltage_policy_enabled": True,
-                "voltage_policy_active": False,
-                "voltage_policy_applied": False,
-                "voltage_policy_status": "not_applicable_test_type",
-                "voltage_policy_apply_to": list(apply_to),
-                "voltage_policy_apply_to_defined": apply_to_defined,
-            }
-        ]
-    if nominal_voltage_v is None or nominal_voltage_v <= 0:
-        return [
-            {
-                "voltage_policy_enabled": True,
-                "voltage_policy_active": False,
-                "voltage_policy_applied": False,
-                "voltage_policy_status": "disabled_missing_nominal",
-                "voltage_policy_apply_to": list(apply_to),
-                "voltage_policy_apply_to_defined": apply_to_defined,
-            }
-        ]
-    if not levels:
-        return [
-            {
-                "voltage_policy_enabled": True,
-                "voltage_policy_active": False,
-                "voltage_policy_applied": False,
-                "voltage_policy_status": "disabled_no_levels",
-                "voltage_policy_apply_to": list(apply_to),
-                "voltage_policy_apply_to_defined": apply_to_defined,
-            }
-        ]
-
-    axes: List[Dict[str, Any]] = []
-    for axis in _resolve_voltage_axis(recipe_meta):
-        tags = dict(axis or {})
-        tags.update(
-            {
-                "voltage_policy_enabled": True,
-                "voltage_policy_active": True,
-                "voltage_policy_applied": True,
-                "voltage_policy_status": "enabled",
-                "voltage_policy_apply_to": list(apply_to),
-                "voltage_policy_apply_to_defined": apply_to_defined,
-            }
-        )
-        axes.append(tags)
-    return axes or [
-        {
-            "voltage_policy_enabled": True,
-            "voltage_policy_active": False,
-            "voltage_policy_applied": False,
-            "voltage_policy_status": "disabled_no_levels",
-            "voltage_policy_apply_to": list(apply_to),
-            "voltage_policy_apply_to_defined": apply_to_defined,
-        }
-    ]
-
-
-def _data_rate_key_suffix(axis: Dict[str, Any]) -> str:
-    data_rate = str(axis.get("data_rate", "") or "").strip()
-    if not data_rate:
-        return ""
-    return f"|RATE:{data_rate}"
-
-
-def _resolve_data_rate_axis_for_test(
-    recipe_meta: Dict[str, Any],
-    *,
-    standard: str,
-    test_type: str,
-) -> List[Dict[str, Any]]:
-    policy = normalize_data_rate_policy(recipe_meta.get("data_rate_policy") or {})
-    enabled = bool(policy.get("enabled"))
-    apply_to = _normalize_apply_to(policy.get("apply_to"))
-    apply_to_defined = bool(policy.get("apply_to_defined"))
-    current_test_type = normalize_test_type_symbol(test_type)
-    applies = (not apply_to_defined) or (current_test_type in apply_to)
-    by_standard = dict(policy.get("by_standard") or {})
-    selected_data_rates = _normalize_rate_list(recipe_meta.get("selected_data_rates") or [])
-    allowed_rates = _normalize_rate_list(by_standard.get(str(standard or "").strip()) or [])
-
-    if not enabled:
-        return [
-            {
-                "data_rate_policy_enabled": False,
-                "data_rate_policy_active": False,
-                "data_rate_policy_applied": False,
-                "data_rate_policy_status": "disabled",
-                "data_rate_policy_apply_to": list(apply_to),
-                "data_rate_policy_apply_to_defined": apply_to_defined,
-                "data_rate_standard": str(standard or "").strip(),
-            }
-        ]
-    if not applies:
-        return [
-            {
-                "data_rate_policy_enabled": True,
-                "data_rate_policy_active": False,
-                "data_rate_policy_applied": False,
-                "data_rate_policy_status": "not_applicable_test_type",
-                "data_rate_policy_apply_to": list(apply_to),
-                "data_rate_policy_apply_to_defined": apply_to_defined,
-                "data_rate_standard": str(standard or "").strip(),
-            }
-        ]
-    if not allowed_rates:
-        return [
-            {
-                "data_rate_policy_enabled": True,
-                "data_rate_policy_active": False,
-                "data_rate_policy_applied": False,
-                "data_rate_policy_status": "disabled_no_standard_rates",
-                "data_rate_policy_apply_to": list(apply_to),
-                "data_rate_policy_apply_to_defined": apply_to_defined,
-                "data_rate_standard": str(standard or "").strip(),
-            }
-        ]
-
-    effective_rates = [rate for rate in allowed_rates if not selected_data_rates or rate in selected_data_rates]
-    if not effective_rates:
-        return [
-            {
-                "data_rate_policy_enabled": True,
-                "data_rate_policy_active": False,
-                "data_rate_policy_applied": False,
-                "data_rate_policy_status": "disabled_selected_subset_empty",
-                "data_rate_policy_apply_to": list(apply_to),
-                "data_rate_policy_apply_to_defined": apply_to_defined,
-                "data_rate_standard": str(standard or "").strip(),
-                "selected_data_rates": list(selected_data_rates),
-            }
-        ]
-
-    return [
-        {
-            "data_rate_policy_enabled": True,
-            "data_rate_policy_active": True,
-            "data_rate_policy_applied": True,
-            "data_rate_policy_status": "enabled",
-            "data_rate_policy_apply_to": list(apply_to),
-            "data_rate_policy_apply_to_defined": apply_to_defined,
-            "data_rate_standard": str(standard or "").strip(),
-            "selected_data_rates": list(selected_data_rates),
-            "data_rate": rate,
-        }
-        for rate in effective_rates
-    ]
-
-
-def _voltage_key_suffix(axis: Dict[str, Any]) -> str:
-    condition = str(axis.get("voltage_condition", "") or "").strip()
-    if not condition:
-        return ""
-    target_voltage_v = _coerce_float(axis.get("target_voltage_v"))
-    if target_voltage_v is None:
-        return f"|VCOND:{condition}"
-    return f"|VCOND:{condition}|TV:{target_voltage_v:.6f}"
 
 
 def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -287,6 +39,7 @@ def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = No
         "preset": recipe.meta.get("preset_name", ""),
         "group": "",
         "measurement_profile_name": ip.name,
+        "measurement_profile_precedence": recipe.meta.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot"),
         "ruleset_id": recipe.meta.get("ruleset_id", ""),
         "device_class": recipe.meta.get("device_class", ""),
         "psd_result_unit": recipe.meta.get("psd_result_unit", ""),
@@ -298,6 +51,7 @@ def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = No
         "psd_comparator": recipe.meta.get("psd_comparator", ""),
         "psd_canonical_limit_value": recipe.meta.get("psd_canonical_limit_value"),
         "psd_unit_policy_source": recipe.meta.get("psd_unit_policy_source", ""),
+        "psd_policy_source_of_truth": recipe.meta.get("psd_policy_source_of_truth", "band.psd_policy_or_legacy_fallback"),
         "voltage_policy_enabled": bool(recipe.meta.get("voltage_policy_enabled")),
         "voltage_policy_active": bool(recipe.meta.get("voltage_policy_active")),
         "voltage_policy_status": recipe.meta.get("voltage_policy_status", ""),
@@ -305,6 +59,7 @@ def _merge_case_tags(recipe, ch: int, ip, extra_tags: Dict[str, Any] | None = No
         "data_rate_policy_active": bool(recipe.meta.get("data_rate_policy_active")),
         "data_rate_policy_status": recipe.meta.get("data_rate_policy_status", ""),
         "nominal_voltage_v": recipe.meta.get("nominal_voltage_v"),
+        "instrument_profiles_role": recipe.meta.get("instrument_profiles_role", "fallback_snapshot_only"),
     }
     if extra_tags:
         tags.update(extra_tags)
@@ -331,40 +86,6 @@ def _resolve_profile_name_for_test_type(
     return normalize_profile_name(profile_name)
 
 
-def _pick_representatives_from_group(
-    group: ChannelGroup,
-    rep_override: Optional[Dict[str, Any]] = None,
-) -> List[int]:
-    """
-    ChannelGroup의 representatives를 기반으로 LOW/MID/HIGH 대표 채널을 선택.
-    rep_override가 있으면 representatives를 override한 뒤 선택.
-    rep_override 예: {"mid": 120} 또는 {"MID": 120}
-    """
-    reps = dict(group.representatives or {})
-    if rep_override:
-        reps.update({str(k).upper(): int(v) for k, v in rep_override.items()})
-
-    if reps:
-        out: List[int] = []
-        for k in ("LOW", "MID", "HIGH"):
-            v = reps.get(k)
-            if v is not None and v not in out:
-                out.append(int(v))
-        return out
-
-    chs = sorted(group.channels or [])
-    if not chs:
-        return []
-    low = chs[0]
-    high = chs[-1]
-    mid = chs[(len(chs) - 1) // 2]
-    out: List[int] = []
-    for x in (low, mid, high):
-        if x not in out:
-            out.append(int(x))
-    return out
-
-
 def _extract_wlan_expansion(selection: Dict[str, Any]) -> Dict[str, Any]:
     wlan = dict(selection.get("wlan_expansion") or {})
     if wlan:
@@ -388,7 +109,7 @@ def _derive_standard_summary(wlan: Dict[str, Any]) -> str:
             standards.append(standard)
     if not standards:
         return ""
-    return standards[0] if len(standards) == 1 else "MULTI"
+    return standards[0] if len(standards) == 1 else ""
 
 
 def _derive_bandwidth_summary(wlan: Dict[str, Any]) -> List[int]:
@@ -432,6 +153,165 @@ def _derive_channel_summary(wlan: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_case_dimensions_meta(recipe_meta: Dict[str, Any]) -> Dict[str, Any]:
+    raw = dict(recipe_meta.get("case_dimensions") or {})
+    dimensions = dict(raw.get("dimensions") or {})
+    return {
+        "defined": bool(raw.get("defined", False)),
+        "base": [str(x).strip() for x in (raw.get("base") or []) if str(x).strip()],
+        "optional_axes": list(raw.get("optional_axes") or []),
+        "dimensions": {
+            str(name).strip(): dict(value or {})
+            for name, value in dimensions.items()
+            if str(name).strip() and isinstance(value, dict)
+        },
+    }
+
+
+def _ordered_axis_names(case_dimensions: Dict[str, Any]) -> List[str]:
+    base = [str(name).strip() for name in (case_dimensions.get("base") or []) if str(name).strip()]
+    dimensions = dict(case_dimensions.get("dimensions") or {})
+    ordered: List[str] = []
+    for axis_name in base:
+        if axis_name not in ordered:
+            ordered.append(axis_name)
+    for axis_name in dimensions.keys():
+        if axis_name not in ordered:
+            ordered.append(axis_name)
+    if "test_type" not in ordered:
+        ordered.insert(0, "test_type")
+    return ordered
+
+
+def _initial_axis_state(case_dimensions: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "fields": {},
+        "tags": {
+            "axis_values": {},
+            "axis_order": [str(name).strip() for name in (case_dimensions.get("base") or []) if str(name).strip()],
+        },
+        "key_suffix": "",
+    }
+
+
+def _apply_axis_payload_to_state(
+    state: Dict[str, Any],
+    *,
+    axis_name: str,
+    axis_def: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    merged_fields = dict(state.get("fields") or {})
+    merged_fields.update(dict(payload.get("fields") or {}))
+
+    merged_tags = dict(state.get("tags") or {})
+    axis_values = dict(merged_tags.get("axis_values") or {})
+    axis_value = payload.get("axis_value")
+    if axis_value is not None:
+        axis_values[axis_name] = axis_value
+    merged_tags["axis_values"] = axis_values
+
+    axis_order = list(merged_tags.get("axis_order") or [])
+    if axis_name not in axis_order:
+        axis_order.append(axis_name)
+    merged_tags["axis_order"] = axis_order
+    merged_tags.update(dict(payload.get("tags") or {}))
+
+    return {
+        "fields": merged_fields,
+        "tags": merged_tags,
+        "key_suffix": f"{state.get('key_suffix', '')}{payload.get('key_suffix', '')}",
+    }
+
+
+def _expand_axis_product(ruleset: RuleSet, recipe: Recipe, case_dimensions: Dict[str, Any]) -> List[Dict[str, Any]]:
+    recipe_meta = dict(recipe.meta or {})
+    dimensions = dict(case_dimensions.get("dimensions") or {})
+    states: List[Dict[str, Any]] = [_initial_axis_state(case_dimensions)]
+    for axis_name in _ordered_axis_names(case_dimensions):
+        axis_def = dict(dimensions.get(axis_name) or {"name": axis_name, "maps_to": axis_core_field(axis_name, {})})
+        next_states: List[Dict[str, Any]] = []
+        for state in states:
+            payloads = resolve_axis_values(
+                AxisResolverContext(
+                    axis_name=axis_name,
+                    axis_def=axis_def,
+                    recipe=recipe,
+                    ruleset=ruleset,
+                    recipe_meta=recipe_meta,
+                    state=state,
+                )
+            )
+            if not payloads:
+                next_states.append(state)
+                continue
+            log.info(
+                "CASE AXIS: axis=%s test_type=%s payload_count=%s values=%s",
+                axis_name,
+                str(dict(state.get("fields") or {}).get("test_type", "") or ""),
+                len(payloads),
+                [payload.get("axis_value") for payload in payloads],
+            )
+            for payload in payloads:
+                next_states.append(_apply_axis_payload_to_state(state, axis_name=axis_name, axis_def=axis_def, payload=payload))
+        states = next_states or states
+    return states
+
+
+def _build_case_from_axis_combination(ruleset: RuleSet, recipe: Recipe, state: Dict[str, Any]) -> TestCase:
+    fields = dict(state.get("fields") or {})
+    test_type = normalize_test_type_symbol(fields.get("test_type", ""))
+    ip = recipe.instrument_profile_by_test[test_type]
+    channel = coerce_int(fields.get("channel"), 0)
+    band = str(fields.get("band", recipe.band) or "")
+    standard = str(fields.get("standard", recipe.standard) or "")
+    bw_mhz = coerce_int(fields.get("bw_mhz"), 0)
+    phy_mode = str(fields.get("phy_mode", "") or "")
+    center_freq_mhz = coerce_float(fields.get("center_freq_mhz"))
+    if center_freq_mhz is None:
+        center_freq_mhz = center_freq_mhz_from_channel_5g(channel) if band == "5G" else 0.0
+
+    tags = _merge_case_tags(
+        recipe,
+        channel,
+        ip,
+        {
+            "group": find_group_for_state(ruleset, state),
+            "phy_mode": phy_mode,
+            "measurement_profile_ref_source": recipe.meta.get("effective_measurement_profile_ref_source_by_test", {}).get(test_type, ""),
+            **dict(state.get("tags") or {}),
+        },
+    )
+
+    if phy_mode:
+        key_prefix = f"{recipe.tech}|{recipe.regulation}|{band}|{standard}|{phy_mode}|{test_type}|CH{channel}|BW{bw_mhz}"
+    else:
+        key_prefix = f"{recipe.tech}|{recipe.regulation}|{band}|{standard}|{test_type}|CH{channel}|BW{bw_mhz}"
+    key = f"{key_prefix}{state.get('key_suffix', '')}"
+    log.info(
+        "CASE AXIS: standard=%s voltage=%s data_rate=%s bw=%s ch=%s test_type=%s axis_values=%s",
+        standard,
+        tags.get("voltage_condition", ""),
+        tags.get("data_rate", ""),
+        bw_mhz,
+        channel,
+        test_type,
+        dict(tags.get("axis_values", {}) or {}),
+    )
+
+    return TestCase(
+        test_type=test_type,
+        band=band,
+        standard=standard,
+        channel=channel,
+        center_freq_mhz=float(center_freq_mhz),
+        bw_mhz=bw_mhz,
+        instrument=dict(ip.settings),
+        tags=tags,
+        key=key,
+    )
+
+
 def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     sel = dict(preset.selection or {})
 
@@ -460,10 +340,11 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     effective_profile_ref_source: Dict[str, str] = {}
     selector_fallback_tests: List[str] = []
     device_class = str(sel.get("device_class", "")).strip()
-    nominal_voltage_v = _coerce_float(sel.get("nominal_voltage_v"))
-    selected_data_rates = _normalize_rate_list(sel.get("selected_data_rates") or [])
+    nominal_voltage_v = coerce_float(sel.get("nominal_voltage_v"))
+    selected_data_rates = normalize_rate_list(sel.get("selected_data_rates") or [])
     voltage_policy = normalize_voltage_policy(getattr(ruleset, "voltage_policy", {}) or {})
     data_rate_policy = normalize_data_rate_policy(getattr(ruleset, "data_rate_policy", {}) or {})
+    case_dimensions = dict(getattr(ruleset, "case_dimensions", {}) or {})
     voltage_policy_enabled = bool(voltage_policy.get("enabled"))
     voltage_levels = list(voltage_policy.get("levels") or [])
     voltage_policy_active = bool(voltage_policy_enabled and nominal_voltage_v and nominal_voltage_v > 0 and voltage_levels)
@@ -504,12 +385,14 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
                 settings={
                     "profile_name": prof_name,
                     "instrument_snapshot_source": "measurement_profile_reference",
+                    "runtime_profile_precedence": "measurement_profile_wins_over_instrument_snapshot",
                 },
             )
         else:
             settings = dict(ip.settings or {})
             settings.setdefault("profile_name", prof_name)
             settings.setdefault("instrument_snapshot_source", "ruleset.instrument_profiles")
+            settings.setdefault("runtime_profile_precedence", "measurement_profile_wins_over_instrument_snapshot")
             ip_by_test[t] = InstrumentProfile(name=ip.name, settings=settings)
 
     meta = {
@@ -522,6 +405,8 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "effective_measurement_profile_by_test": dict(effective_profile_map),
         "effective_measurement_profile_ref_source_by_test": dict(effective_profile_ref_source),
         "instrument_profile_refs": dict(getattr(ruleset, "instrument_profile_refs", {}) or {}),
+        "instrument_profiles_role": "fallback_snapshot_only",
+        "case_dimensions": case_dimensions,
         "device_class": device_class,
         "voltage_policy": voltage_policy,
         "voltage_policy_enabled": voltage_policy_enabled,
@@ -546,6 +431,8 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
         "psd_comparator": psd_policy["comparator"],
         "psd_canonical_limit_value": psd_policy["canonical_limit_value"],
         "psd_unit_policy_source": psd_unit_policy_source,
+        "psd_policy_source_of_truth": "band.psd_policy_or_legacy_fallback",
+        "measurement_profile_precedence": "measurement_profile_wins_over_instrument_snapshot",
     }
     pol = dict(sel.get("execution_policy") or {})
     if pol:
@@ -621,7 +508,7 @@ def build_recipe(ruleset: RuleSet, preset: Preset) -> Recipe:
     )
 
 
-def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
+def _expand_recipe_legacy(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
     if recipe.band not in ruleset.bands:
         raise ValueError(
             f"Band '{recipe.band}' not defined in ruleset '{ruleset.id}'. "
@@ -640,7 +527,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
     recipe_meta = dict(recipe.meta or {})
     voltage_axes_by_test: Dict[str, List[Dict[str, Any]]] = {}
     for test in recipe.test_types:
-        axes = _resolve_voltage_axis_for_test(recipe_meta, test)
+        axes = resolve_voltage_axis_for_test(recipe_meta, test)
         voltage_axes_by_test[test] = axes
         log.info(
             "expand_recipe voltage axis decision | ruleset_id=%s test_type=%s enabled=%s active=%s apply_to=%s apply_to_defined=%s applied=%s generated_levels=%s nominal_voltage_v=%s",
@@ -679,7 +566,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                     )
                     for test in recipe.test_types:
                         ip = recipe.instrument_profile_by_test[test]
-                        data_rate_axes = _resolve_data_rate_axis_for_test(recipe_meta, standard=standard, test_type=test)
+                        data_rate_axes = resolve_data_rate_axis_for_test(recipe_meta, standard=standard, test_type=test)
                         log.info(
                             "expand_recipe data rate decision | ruleset_id=%s standard=%s test_type=%s enabled=%s active=%s apply_to=%s apply_to_defined=%s applied=%s chosen_data_rates=%s",
                             recipe.meta.get("ruleset_id", ""),
@@ -698,7 +585,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                                 data_rate_tags = dict(data_rate_axis or {})
                                 key = (
                                     f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{standard}|{phy_mode}|"
-                                    f"{test}|CH{ch}|BW{bw}{_data_rate_key_suffix(data_rate_tags)}{_voltage_key_suffix(voltage_tags)}"
+                                    f"{test}|CH{ch}|BW{bw}{data_rate_key_suffix(data_rate_tags)}{voltage_key_suffix(voltage_tags)}"
                                 )
                                 tags = _merge_case_tags(
                                     recipe,
@@ -757,7 +644,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                 )
             group_obj = cg[g]
             rep_override = reps_override_all.get(g, {}) or {}
-            channels.extend(_pick_representatives_from_group(group_obj, rep_override))
+            channels.extend(pick_representatives_from_group(group_obj, rep_override))
 
     elif policy == "ALL_CHANNELS":
         cg = band_info.channel_groups
@@ -779,7 +666,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
         for bw in recipe.bandwidth_mhz:
             for ch in channels:
                 cf = center_freq_mhz_from_channel_5g(ch) if recipe.band == "5G" else 0.0
-                data_rate_axes = _resolve_data_rate_axis_for_test(recipe_meta, standard=recipe.standard, test_type=test)
+                data_rate_axes = resolve_data_rate_axis_for_test(recipe_meta, standard=recipe.standard, test_type=test)
                 log.info(
                     "expand_recipe data rate decision | ruleset_id=%s standard=%s test_type=%s enabled=%s active=%s apply_to=%s apply_to_defined=%s applied=%s chosen_data_rates=%s",
                     recipe.meta.get("ruleset_id", ""),
@@ -798,7 +685,7 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                         data_rate_tags = dict(data_rate_axis or {})
                         key = (
                             f"{recipe.tech}|{recipe.regulation}|{recipe.band}|{recipe.standard}|"
-                            f"{test}|CH{ch}|BW{bw}{_data_rate_key_suffix(data_rate_tags)}{_voltage_key_suffix(voltage_tags)}"
+                            f"{test}|CH{ch}|BW{bw}{data_rate_key_suffix(data_rate_tags)}{voltage_key_suffix(voltage_tags)}"
                         )
                         tags = _merge_case_tags(
                             recipe,
@@ -833,3 +720,24 @@ def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
                             tags=tags,
                             key=key,
                         )
+
+
+def _expand_recipe_by_axes(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
+    recipe_meta = dict(recipe.meta or {})
+    case_dimensions = _normalize_case_dimensions_meta(recipe_meta)
+    if recipe.band and recipe.band not in ruleset.bands:
+        raise ValueError(
+            f"Band '{recipe.band}' not defined in ruleset '{ruleset.id}'. "
+            f"Available: {list(ruleset.bands.keys())}"
+        )
+
+    for state in _expand_axis_product(ruleset, recipe, case_dimensions):
+        yield _build_case_from_axis_combination(ruleset, recipe, state)
+
+
+def expand_recipe(ruleset: RuleSet, recipe: Recipe) -> Iterable[TestCase]:
+    case_dimensions = _normalize_case_dimensions_meta(dict(recipe.meta or {}))
+    if bool(case_dimensions.get("defined")):
+        yield from _expand_recipe_by_axes(ruleset, recipe)
+        return
+    yield from _expand_recipe_legacy(ruleset, recipe)

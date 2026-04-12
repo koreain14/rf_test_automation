@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Iterable
 
+from application.preset_migration import analyze_preset_model
 from application.preset_model import PresetModel
-from application.psd_unit_policy import PSD_ALLOWED_UNITS, normalize_psd_result_unit
 from application.preset_validation_models import PresetValidationResult
-from application.test_type_symbols import normalize_profile_name
-from application.test_type_symbols import normalize_test_type_list
+from application.preset_validator_registry import PresetValidatorRegistry
 from application.preset_validators.wlan_validator import WlanPresetValidator
+from application.psd_unit_policy import PSD_ALLOWED_UNITS, normalize_psd_result_unit
+from application.test_type_symbols import normalize_profile_name, normalize_test_type_list
+from domain.ruleset_models import collect_ruleset_test_types, project_ruleset_test_contracts
+from domain.test_item_pool import get_test_item_definition
+
 
 ALLOWED_CHANNEL_POLICIES = {
     "CUSTOM_LIST",
@@ -22,6 +28,7 @@ ALLOWED_EXECUTION_TYPES = {
 
 class PresetValidator:
     def __init__(self) -> None:
+        self._registry = PresetValidatorRegistry()
         self._wlan_validator = WlanPresetValidator()
 
     def validate(self, model: PresetModel) -> PresetValidationResult:
@@ -36,17 +43,17 @@ class PresetValidator:
             result.add_warning("RuleSet version is empty.")
         if not sel.band.strip():
             result.add_error("Band is required.")
-        has_wlan_expansion = _has_wlan_expansion(model)
 
+        has_wlan_expansion = _has_wlan_expansion(model)
         if _looks_like_wlan(model) and not has_wlan_expansion:
             result.add_error("WLAN preset requires WLAN Expansion rows.")
         elif not sel.standard.strip() and not has_wlan_expansion:
             result.add_error("Standard is required.")
         if not sel.test_types:
             result.add_error("At least one test type is required.")
-        if not sel.bandwidth_mhz and not has_wlan_expansion:
+        if not has_wlan_expansion and not sel.bandwidth_mhz:
             result.add_error("At least one bandwidth is required.")
-        if not sel.channels.channels and not has_wlan_expansion:
+        if not has_wlan_expansion and not sel.channels.channels:
             result.add_error("At least one channel is required.")
 
         if not has_wlan_expansion and sel.channels.policy not in ALLOWED_CHANNEL_POLICIES:
@@ -66,15 +73,41 @@ class PresetValidator:
 
         normalized_tests = normalize_test_type_list(sel.test_types)
         normalized_order = normalize_test_type_list(sel.execution_policy.test_order)
+        ruleset_payload = _load_ruleset_payload(model.ruleset_id)
+        migration = analyze_preset_model(model, ruleset_payload)
+
+        for message in migration.auto_fixes:
+            result.add_warning(f"Auto-fix available at runtime: {message}")
+        for item in migration.disabled_items:
+            result.add_warning(f"Disabled in effective preset: {item.value} ({item.reason})")
+        for message in migration.warnings:
+            result.add_warning(message)
+        for message in migration.errors:
+            result.add_warning(f"Execution blocked until fixed: {message}")
 
         duplicated_tests = _find_duplicates(normalized_tests)
         if duplicated_tests:
             result.add_warning(f"Duplicate test types found: {duplicated_tests}")
 
-        missing_exec = [tt for tt in normalized_tests if tt not in normalized_order]
+        effective_tests = normalize_test_type_list(migration.effective_selection.get("test_types") or normalized_tests)
+        for test_type in effective_tests:
+            pool_item = get_test_item_definition(test_type) or {}
+            required_instruments = [
+                str(item).strip()
+                for item in (pool_item.get("required_instruments") or [])
+                if str(item).strip()
+            ]
+            if required_instruments:
+                result.add_warning(
+                    f"Test '{test_type}' requires instruments: {', '.join(required_instruments)}. "
+                    "Verify equipment/instrument profile coverage before execution."
+                )
+
+        missing_exec = [tt for tt in effective_tests if tt not in normalized_order]
         if missing_exec:
             result.add_warning(
-                f"Execution order does not include selected test types: {missing_exec}. Default runner order may differ."
+                f"Execution order does not include selected/effective test types: {missing_exec}. "
+                "Effective preset will append them automatically at execution time."
             )
 
         measurement_profile_name = normalize_profile_name(sel.measurement_profile_name)
@@ -106,7 +139,11 @@ class PresetValidator:
         if "KC" in str(model.ruleset_id or "").upper() and nominal_voltage_v in (None, ""):
             result.add_warning("KC preset is missing nominal voltage. Voltage condition axis will be skipped.")
 
-        if _looks_like_wlan(model):
+        extension_validators = self._registry.resolve_validators(model)
+        if extension_validators:
+            for validator in extension_validators:
+                validator.validate(model, result)
+        elif _looks_like_wlan(model):
             self._wlan_validator.validate(model, result)
 
         return result
@@ -146,3 +183,25 @@ def _has_wlan_expansion(model: PresetModel) -> bool:
     meta = dict(sel.metadata or {})
     wlan = dict(meta.get("wlan_expansion") or {})
     return bool(wlan.get("mode_plan") or wlan.get("channel_plan"))
+
+
+def _load_ruleset_payload(ruleset_id: str) -> dict:
+    normalized = str(ruleset_id or "").strip()
+    if not normalized:
+        return {}
+    path = Path("rulesets") / f"{normalized.lower()}.json"
+    if not path.exists() and normalized.upper() == "KC_WLAN":
+        alt = Path("rulesets") / "kc_wlan.json"
+        if alt.exists():
+            path = alt
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["test_contracts"] = project_ruleset_test_contracts(
+            payload.get("test_contracts") or {},
+            tests_supported=collect_ruleset_test_types(payload),
+        )
+        return payload
+    except Exception:
+        return {}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Dict
 
-from application.plan_control_meta import get_antenna, get_dut_control_mode, get_motion, get_power, get_switch_path
+from application.plan_control_meta import get_antenna, get_correction, get_dut_control_mode, get_motion, get_power, get_switch_path
 from application.run_display_formatter import build_plan_summary_lines
 
 
@@ -39,6 +39,9 @@ class PlanControlService:
     def current_motion(self, recipe: Any) -> dict:
         return get_motion(self.get_meta(recipe))
 
+    def current_correction(self, recipe: Any) -> dict:
+        return get_correction(self.get_meta(recipe))
+
     def current_dut_control_mode(self, recipe: Any) -> str:
         return get_dut_control_mode(self.get_meta(recipe))
 
@@ -61,6 +64,9 @@ class PlanControlService:
 
     def update_motion(self, recipe: Any, settings: dict):
         return self.update_meta(recipe, {"motion_control": dict(settings or {})})
+
+    def update_correction(self, recipe: Any, settings: dict):
+        return self.update_meta(recipe, {"correction": dict(settings or {})})
 
     def build_summary(self, preset_name: str, recipe: Any, execution_order: list[str]) -> str:
         return build_plan_summary_lines(preset_name, self.get_meta(recipe), execution_order)

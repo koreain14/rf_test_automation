@@ -1,1 +1,2 @@
 from .preset_editor_dialog import PresetEditorDialog
+from .ruleset_axis_editor_dialog import RulesetAxisEditorDialog

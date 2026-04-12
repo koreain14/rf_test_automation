@@ -32,7 +32,7 @@ class WlanExpansionEditor(BaseExpansionEditor):
 
     content_changed = Signal()
 
-    STANDARD_OPTIONS = ["802.11b", "802.11g", "802.11n", "802.11ac", "802.11ax", "802.11be"]
+    STANDARD_OPTIONS = ["802.11a", "802.11b", "802.11g", "802.11n", "802.11ac", "802.11ax", "802.11be"]
     PHY_OPTIONS = ["DSSS", "OFDM", "HT", "VHT", "HE", "EHT"]
 
     QUICK_PROFILES = {
@@ -50,6 +50,7 @@ class WlanExpansionEditor(BaseExpansionEditor):
         },
         "5G Basic": {
             "mode_plan": [
+                {"standard": "802.11a", "phy_mode": "OFDM", "bandwidths_mhz": [20]},
                 {"standard": "802.11n", "phy_mode": "HT", "bandwidths_mhz": [20, 40]},
                 {"standard": "802.11ac", "phy_mode": "VHT", "bandwidths_mhz": [20, 40, 80]},
                 {"standard": "802.11ax", "phy_mode": "HE", "bandwidths_mhz": [20, 40, 80]},
@@ -62,6 +63,7 @@ class WlanExpansionEditor(BaseExpansionEditor):
         },
         "All WLAN Modes": {
             "mode_plan": [
+                {"standard": "802.11a", "phy_mode": "OFDM", "bandwidths_mhz": [20]},
                 {"standard": "802.11b", "phy_mode": "DSSS", "bandwidths_mhz": [20]},
                 {"standard": "802.11g", "phy_mode": "OFDM", "bandwidths_mhz": [20]},
                 {"standard": "802.11n", "phy_mode": "HT", "bandwidths_mhz": [20, 40]},

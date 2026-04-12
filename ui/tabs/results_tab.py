@@ -1,11 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import csv
 import logging
 from typing import Callable, Dict, List
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,13 +24,14 @@ from application.result_display_formatter import format_step_result_row
 from application.result_difference import format_difference, format_numeric_value
 from ui.results_table_model import ResultsTableModel
 from ui.step_log_model import StepLogModel
-from ui.workers.results_task_worker import ResultsTaskWorker
+from ui.tabs.result_export_helper import ResultExportHelper
+from ui.tabs.result_task_tab_base import ResultTaskTabBase
 
 
 log = logging.getLogger(__name__)
 
 
-class ResultsTab(QWidget):
+class ResultsTab(QWidget, ResultTaskTabBase):
     def __init__(
         self,
         service,
@@ -50,9 +48,8 @@ class ResultsTab(QWidget):
         self.get_base_preset_id = get_base_preset_id
         self.reload_presets_callback = reload_presets_callback
         self._last_results_rows: List[Dict] = []
-        self._task_worker: ResultsTaskWorker | None = None
-        self._task_generation = 0
-        self._busy_action = ""
+        self._export_helper = ResultExportHelper()
+        self._init_result_task_support()
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -195,8 +192,7 @@ class ResultsTab(QWidget):
         self.results_table.selectionModel().selectionChanged.connect(self.on_result_selection_changed)
 
     def reset_view(self) -> None:
-        self._task_generation += 1
-        self._task_worker = None
+        self._cancel_pending_tasks()
         self._last_results_rows = []
         self.run_combo.blockSignals(True)
         self.run_combo.clear()
@@ -222,48 +218,13 @@ class ResultsTab(QWidget):
         self._update_result_quick_buttons_style()
         self._set_busy(False)
 
-    def _set_busy(self, busy: bool, action: str = "") -> None:
-        self._busy_action = action if busy else ""
+    def _set_busy_impl(self, busy: bool, action: str = "") -> None:
         self.btn_refresh_runs.setEnabled(not busy)
         self.btn_load_results.setEnabled(not busy)
         self.btn_export_results_csv.setEnabled(not busy)
         self.btn_export_results_excel.setEnabled(not busy)
         self.btn_clear_result_filter.setEnabled(not busy)
         self.btn_rerun_from_selection.setEnabled(not busy)
-
-    def _finish_worker(self, worker: ResultsTaskWorker) -> None:
-        if self._task_worker is worker:
-            self._task_worker = None
-        worker.deleteLater()
-        self._set_busy(False)
-
-    def _start_task(self, *, action: str, task, on_success, error_title: str) -> None:
-        if self._task_worker is not None and self._task_worker.isRunning():
-            log.info("results task skipped | busy_action=%s next_action=%s", self._busy_action, action)
-            return
-
-        self._task_generation += 1
-        generation = self._task_generation
-        worker = ResultsTaskWorker(task)
-        self._task_worker = worker
-        self._set_busy(True, action=action)
-
-        def _handle_success(payload) -> None:
-            self._finish_worker(worker)
-            if generation != self._task_generation:
-                return
-            on_success(payload)
-
-        def _handle_failure(error_text: str) -> None:
-            self._finish_worker(worker)
-            if generation != self._task_generation:
-                return
-            log.error("results task failed | action=%s\n%s", action, error_text)
-            QMessageBox.critical(self, error_title, error_text)
-
-        worker.succeeded.connect(_handle_success)
-        worker.failed.connect(_handle_failure)
-        worker.start()
 
     def _fill_run_combo(self, combo: QComboBox, runs: List[Dict]) -> None:
         current = combo.currentData()
@@ -337,6 +298,8 @@ class ResultsTab(QWidget):
                     str(row.get("test_key", "")),
                     str(row.get("measurement_profile_name", "")),
                     str(row.get("comparator", "")),
+                    str(row.get("correction_profile_name", "")),
+                    str(row.get("correction_bound_path", "")),
                 ]).lower()
                 if search_text not in hay:
                     continue
@@ -498,6 +461,7 @@ class ResultsTab(QWidget):
             task=_task,
             on_success=_apply,
             error_title="Load Results Failed",
+            log_prefix="results task",
         )
 
     def clear_result_filters(self):
@@ -545,6 +509,12 @@ class ResultsTab(QWidget):
         lines = [
             f"Status: {row.get('status', '')}",
             f"Measured: {format_numeric_value(row.get('measured_value'))}",
+            f"Raw Measured: {format_numeric_value(row.get('raw_measured_value'))}",
+            f"Applied Correction (dB): {format_numeric_value(row.get('applied_correction_db'))}",
+            f"Correction Profile: {row.get('correction_profile_name', '')}",
+            f"Correction Mode: {row.get('correction_mode', '')}",
+            f"Correction Path: {row.get('correction_bound_path', '')}",
+            f"Correction Breakdown: {row.get('correction_breakdown', {})}",
             f"Limit: {format_numeric_value(row.get('limit_value'))}",
             f"Difference: {format_difference(row.get('difference_value'), row.get('difference_unit', ''))}",
             f"Unit: {row.get('measurement_unit', '') or row.get('difference_unit', '')}",
@@ -605,91 +575,6 @@ class ResultsTab(QWidget):
             limit=limit,
         )
 
-    def _build_results_export_row(self, row: Dict) -> Dict:
-        export_row = dict(row or {})
-        export_row["measured_value"] = format_numeric_value(export_row.get("measured_value"))
-        export_row["limit_value"] = format_numeric_value(export_row.get("limit_value"))
-        export_row["difference_display"] = format_difference(
-            export_row.get("difference_value"),
-            export_row.get("difference_unit", ""),
-        )
-        export_row["target_voltage_v_display"] = self._format_voltage(export_row.get("target_voltage_v"))
-        export_row["screenshot"] = "Yes" if export_row.get("has_screenshot") else ""
-        return export_row
-
-    def _write_results_csv(self, path: str, rows: List[Dict]) -> None:
-        cols = [
-            ("status", "Status"),
-            ("test_type", "Test"),
-            ("band", "Band"),
-            ("standard", "Standard"),
-            ("data_rate", "Data Rate"),
-            ("bw_mhz", "BW(MHz)"),
-            ("channel", "CH"),
-            ("voltage_condition", "Voltage Cond"),
-            ("target_voltage_v_display", "Voltage (V)"),
-            ("measured_value", "Measured"),
-            ("limit_value", "Limit"),
-            ("difference_display", "Difference"),
-            ("measurement_unit", "Unit"),
-            ("screenshot", "Screenshot"),
-            ("reason", "Reason"),
-            ("test_key", "Key"),
-            ("result_id", "Result ID"),
-        ]
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            writer.writerow([header for _, header in cols])
-            for row in rows:
-                export_row = self._build_results_export_row(row)
-                writer.writerow([export_row.get(key, "") for key, _ in cols])
-
-    def _write_results_excel(self, path: str, rows: List[Dict]) -> None:
-        cols = [
-            ("status", "Status"),
-            ("test_type", "Test"),
-            ("band", "Band"),
-            ("standard", "Standard"),
-            ("data_rate", "Data Rate"),
-            ("bw_mhz", "BW(MHz)"),
-            ("channel", "CH"),
-            ("voltage_condition", "Voltage Cond"),
-            ("target_voltage_v_display", "Voltage (V)"),
-            ("measured_value", "Measured"),
-            ("limit_value", "Limit"),
-            ("difference_display", "Difference"),
-            ("measurement_unit", "Unit"),
-            ("screenshot", "Screenshot"),
-            ("reason", "Reason"),
-            ("test_key", "Key"),
-            ("result_id", "Result ID"),
-        ]
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Results"
-        header_font = Font(bold=True)
-        for c, (_, header) in enumerate(cols, start=1):
-            cell = ws.cell(row=1, column=c, value=header)
-            cell.font = header_font
-            cell.alignment = Alignment(vertical="center")
-
-        for r_i, row in enumerate(rows, start=2):
-            export_row = self._build_results_export_row(row)
-            for c_i, (key, _) in enumerate(cols, start=1):
-                ws.cell(row=r_i, column=c_i, value=export_row.get(key, ""))
-
-        widths = [12, 12, 10, 14, 12, 10, 8, 16, 12, 14, 14, 18, 14, 12, 40, 26, 26]
-        for c_i, width in enumerate(widths, start=1):
-            ws.column_dimensions[ws.cell(row=1, column=c_i).column_letter].width = width
-        wb.save(path)
-
-    def _format_voltage(self, value) -> str:
-        try:
-            if value in (None, ""):
-                return ""
-            return f"{float(value):g}"
-        except Exception:
-            return str(value or "")
 
     def export_results_csv(self):
         project_id = self.get_project_id()
@@ -712,7 +597,7 @@ class ResultsTab(QWidget):
             )
             if not rows:
                 return {"path": path, "rows": []}
-            self._write_results_csv(path, rows)
+            self._export_helper.write_results_csv(path, rows)
             return {"path": path, "rows": rows}
 
         def _done(payload: Dict) -> None:
@@ -727,6 +612,7 @@ class ResultsTab(QWidget):
             task=_task,
             on_success=_done,
             error_title="Export CSV Failed",
+            log_prefix="results task",
         )
 
     def export_results_excel(self):
@@ -750,7 +636,7 @@ class ResultsTab(QWidget):
             )
             if not rows:
                 return {"path": path, "rows": []}
-            self._write_results_excel(path, rows)
+            self._export_helper.write_results_excel(path, rows)
             return {"path": path, "rows": rows}
 
         def _done(payload: Dict) -> None:
@@ -765,6 +651,7 @@ class ResultsTab(QWidget):
             task=_task,
             on_success=_done,
             error_title="Export Excel Failed",
+            log_prefix="results task",
         )
 
     def results_show_all(self):

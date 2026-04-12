@@ -96,6 +96,12 @@ def init_db():
       margin_db REAL,
       measured_value REAL,
       limit_value REAL,
+      raw_measured_value REAL,
+      applied_correction_db REAL,
+      correction_profile_name TEXT DEFAULT '',
+      correction_mode TEXT DEFAULT '',
+      correction_bound_path TEXT DEFAULT '',
+      correction_breakdown_json TEXT DEFAULT '',
 
       instrument_snapshot_json TEXT,
       tags_json TEXT,
@@ -151,10 +157,26 @@ def init_db():
     # Additive migration for existing DB files. CREATE TABLE IF NOT EXISTS does not
     # backfill newly introduced columns on old databases, so we must explicitly
     # ensure them here during startup.
+    _ensure_results_columns(cur)
     _ensure_plan_case_cache_columns(cur)
 
     conn.commit()
     conn.close()
+
+
+def _ensure_results_columns(cur):
+    existing = {str(r[1]) for r in cur.execute("PRAGMA table_info(results)").fetchall()}
+    additions = [
+        ("raw_measured_value", "REAL"),
+        ("applied_correction_db", "REAL"),
+        ("correction_profile_name", "TEXT NOT NULL DEFAULT ''"),
+        ("correction_mode", "TEXT NOT NULL DEFAULT ''"),
+        ("correction_bound_path", "TEXT NOT NULL DEFAULT ''"),
+        ("correction_breakdown_json", "TEXT NOT NULL DEFAULT ''"),
+    ]
+    for name, ddl in additions:
+        if name not in existing:
+            cur.execute(f"ALTER TABLE results ADD COLUMN {name} {ddl}")
 
 def _ensure_plan_case_cache_columns(cur):
     existing = {str(r[1]) for r in cur.execute("PRAGMA table_info(plan_case_cache)").fetchall()}

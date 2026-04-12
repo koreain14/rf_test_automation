@@ -2,21 +2,24 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-
-CANONICAL_TEST_TYPES: tuple[str, ...] = (
-    "PSD",
-    "OBW",
-    "SP",
-    "RX",
-    "CHANNEL_POWER",
-    "FE",
+from domain.test_item_pool import get_test_item_definition, list_available_test_items
+from domain.test_item_registry import (
+    CANONICAL_TEST_ITEMS,
+    TEST_ITEM_LABELS,
+    normalize_test_id,
+    normalize_test_id_list,
+    normalize_test_id_map,
 )
+
+
+CANONICAL_TEST_TYPES: tuple[str, ...] = tuple(CANONICAL_TEST_ITEMS)
 
 RULESET_WLAN_TEST_TYPES: tuple[str, ...] = (
     "PSD",
     "OBW",
     "SP",
     "RX",
+    "TXP",
 )
 
 DEFAULT_TEST_ORDER: tuple[str, ...] = (
@@ -24,6 +27,7 @@ DEFAULT_TEST_ORDER: tuple[str, ...] = (
     "OBW",
     "SP",
     "RX",
+    "TXP",
 )
 
 PLAN_FILTER_TEST_TYPES: tuple[str, ...] = (
@@ -31,78 +35,28 @@ PLAN_FILTER_TEST_TYPES: tuple[str, ...] = (
     "OBW",
     "SP",
     "RX",
-    "CHANNEL_POWER",
+    "TXP",
+    "DFS",
     "FE",
 )
 
-TEST_TYPE_ALIASES: dict[str, str] = {
-    "POWER_SPECTRAL_DENSITY": "PSD",
-    "OCCUPIED_BANDWIDTH": "OBW",
-    "TX_SPURIOUS": "SP",
-    "RX_SPURIOUS": "RX",
-    "FREQUENCY_ERROR": "FE",
-    "TXP": "CHANNEL_POWER",
-}
-
-TEST_TYPE_UI_LABELS: dict[str, str] = {
-    "PSD": "PSD",
-    "OBW": "OBW",
-    "SP": "SP",
-    "RX": "RX",
-    "CHANNEL_POWER": "CHANNEL_POWER",
-    "FE": "FE",
-}
-
-TEST_TYPE_PROFILE_DEFAULTS: dict[str, str] = {
-    "PSD": "PSD_DEFAULT",
-    "OBW": "OBW_DEFAULT",
-    "SP": "SP_DEFAULT",
-    "RX": "RX_DEFAULT",
-    "CHANNEL_POWER": "TXP_DEFAULT",
-    "FE": "SP_DEFAULT",
-}
+TEST_TYPE_UI_LABELS: dict[str, str] = dict(TEST_ITEM_LABELS)
 
 PROFILE_NAME_ALIASES: dict[str, str] = {
     "RX_DEFAULT": "SP_DEFAULT",
 }
 
-TEST_TYPE_REQUIRED_CAPABILITIES: dict[str, list[str]] = {
-    "PSD": ["analyzer"],
-    "OBW": ["analyzer"],
-    "SP": ["analyzer"],
-    "RX": ["analyzer"],
-    "CHANNEL_POWER": ["analyzer"],
-    "FE": ["analyzer"],
-}
-
 
 def normalize_test_type_symbol(value: str | None) -> str:
-    key = str(value or "").strip().upper()
-    if not key:
-        return ""
-    return TEST_TYPE_ALIASES.get(key, key)
+    return normalize_test_id(value)
 
 
 def normalize_test_type_list(values: Iterable[str] | None) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for value in values or ():
-        normalized = normalize_test_type_symbol(value)
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        out.append(normalized)
-    return out
+    return normalize_test_id_list(values)
 
 
 def normalize_test_type_map(values: Mapping[str, str] | None) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for key, value in (values or {}).items():
-        normalized_key = normalize_test_type_symbol(key)
-        if not normalized_key:
-            continue
-        out[normalized_key] = str(value)
-    return out
+    return normalize_test_id_map(values)
 
 
 def normalize_profile_name(profile_name: str | None) -> str:
@@ -114,14 +68,21 @@ def normalize_profile_name(profile_name: str | None) -> str:
 
 def default_profile_for_test_type(test_type: str | None) -> str:
     normalized = normalize_test_type_symbol(test_type)
-    profile_name = TEST_TYPE_PROFILE_DEFAULTS.get(normalized, "")
+    payload = get_test_item_definition(normalized) or {}
+    profile_name = str(payload.get("default_profile_ref", "") or "")
     return normalize_profile_name(profile_name)
 
 
 def required_capabilities_for_test_type(test_type: str | None) -> list[str]:
     normalized = normalize_test_type_symbol(test_type)
-    return list(TEST_TYPE_REQUIRED_CAPABILITIES.get(normalized, ()))
+    payload = get_test_item_definition(normalized) or {}
+    return [str(item).strip() for item in (payload.get("required_instruments") or []) if str(item).strip()]
 
 
 def canonical_supported_test_types(values: Iterable[str] | None) -> list[str]:
-    return normalize_test_type_list(values)
+    return normalize_test_id_list(values)
+
+
+IMPLEMENTED_TEST_TYPES: tuple[str, ...] = tuple(
+    item["id"] for item in list_available_test_items(selectable_only=True)
+)

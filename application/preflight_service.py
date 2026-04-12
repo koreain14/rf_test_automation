@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+from application.correction_profile_loader import CorrectionProfileLoader
+from application.correction_runtime import normalize_correction_meta, resolve_bound_path
 from application.device_registry import DeviceRegistry
 from application.equipment_profile_repo import EquipmentProfileRepo
 from application.instrument_factory import AutoInstrumentFactory, DummyInstrumentFactory, ScpiInstrumentFactory
@@ -53,6 +55,7 @@ class PreflightService:
         self.device_registry = device_registry
         self.profile_repo = profile_repo
         self.instrument_manager = instrument_manager
+        self.correction_loader = CorrectionProfileLoader()
 
     def validate_plan_context(self, plan_ctx: Any, equipment_profile_name: Optional[str]) -> PreflightResult:
         result = PreflightResult()
@@ -74,6 +77,7 @@ class PreflightService:
         rf_path = meta.get('rf_path') or {}
         power_control = meta.get('power_control') or {}
         motion_control = meta.get('motion_control') or {}
+        correction = normalize_correction_meta(meta)
 
         self._validate_device_slot(result, getattr(profile, 'analyzer', None), 'analyzer', 'Analyzer', required=True)
 
@@ -97,6 +101,7 @@ class PreflightService:
                 self._validate_device_slot(result, getattr(profile, 'mast', None), 'mast', 'Mast', required=True)
                 self._validate_float(result, 'MOTION_HEIGHT_INVALID', 'Mast height must be a valid number.', height)
 
+        self._validate_correction(result, meta)
         return result
 
     def validate_scenario(self, plan_contexts: list[Any], equipment_profile_name: Optional[str]) -> PreflightResult:
@@ -132,6 +137,7 @@ class PreflightService:
         rf_path = meta.get("rf_path") or {}
         power_control = meta.get("power_control") or {}
         motion_control = meta.get("motion_control") or {}
+        correction = normalize_correction_meta(meta)
 
         if not self.allows_profileless_run():
             mode = self.runtime_factory_mode()
@@ -172,6 +178,9 @@ class PreflightService:
                 "Motion control requires an equipment profile with configured motion devices.",
             )
 
+        if correction.get("enabled"):
+            self._validate_correction(result, meta)
+
         if result.ok:
             result.add_warning(
                 "PROFILELESS_DUMMY_RUN",
@@ -206,6 +215,47 @@ class PreflightService:
         path_names = [str(p.get('name', '')) for p in (device.ports or []) if isinstance(p, dict) and p.get('name')]
         if path_names and switch_path not in path_names:
             result.add_error('SWITCH_PATH_INVALID', f"Switch path '{switch_path}' not found in switchbox '{switchbox_name}'. Available: {path_names}")
+
+
+    def _validate_correction(self, result: PreflightResult, meta: dict) -> None:
+        correction = normalize_correction_meta(meta)
+        if not correction.get("enabled"):
+            return
+        mode = str(correction.get("mode") or "DIRECT").strip().upper()
+        if mode not in {"DIRECT", "SWITCH"}:
+            result.add_error("CORRECTION_MODE_INVALID", f"Unsupported correction mode: {mode}")
+            return
+        profile_name = str(correction.get("profile_name") or "").strip()
+        if not profile_name:
+            result.add_error("CORRECTION_PROFILE_MISSING", "Correction is enabled but no correction profile is selected.")
+            return
+        profile = self.correction_loader.get_profile(profile_name)
+        if profile is None:
+            result.add_error("CORRECTION_PROFILE_NOT_FOUND", f"Correction profile not found: {profile_name}")
+            return
+        if profile.normalized_mode() != mode:
+            result.add_error(
+                "CORRECTION_PROFILE_MODE_MISMATCH",
+                f"Correction profile '{profile_name}' is mode '{profile.normalized_mode()}', expected '{mode}'.",
+            )
+            return
+        try:
+            float(correction.get("manual_offset_db") or 0.0)
+        except Exception:
+            result.add_error("CORRECTION_OFFSET_INVALID", "Correction manual offset must be a valid number.")
+        bound_path, binding_source = resolve_bound_path(meta, correction)
+        if mode == "SWITCH":
+            if not bound_path:
+                result.add_error(
+                    "CORRECTION_BOUND_PATH_MISSING",
+                    "SWITCH correction requires an RF Path selection. Select Antenna or Switch Path before running.",
+                )
+                return
+            if bound_path not in dict(profile.ports or {}):
+                result.add_error(
+                    "CORRECTION_BOUND_PATH_INVALID",
+                    f"Correction bound path '{bound_path}' from {binding_source or 'rf_path'} is not present in correction profile '{profile_name}'.",
+                )
 
     def _validate_float(self, result: PreflightResult, code: str, message: str, value: Any) -> None:
         if value in (None, ''):

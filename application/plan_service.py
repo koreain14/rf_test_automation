@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,17 +9,24 @@ from domain.models import (
 )
 from domain.expand import build_recipe, expand_recipe
 from domain.ruleset_models import (
+    collect_ruleset_test_types,
     normalize_case_dimensions,
     normalize_data_rate_policy,
     normalize_instrument_profile_refs,
-    normalize_test_contracts,
+    project_ruleset_test_contracts,
     normalize_voltage_policy,
 )
 from domain.overrides import apply_overrides
 from infrastructure.plan_repo_sqlite import PlanRepositorySQLite
 from infrastructure.run_repo_sqlite import RunRepositorySQLite
 from application.migrations_preset import migrate_preset_to_latest
+from application.preset_migration import build_effective_preset, summarize_migration_result
 from application.plan_query_service import PlanQueryService
+from application.plan_builder_registry import PlanBuilderRegistry
+from application.plan_builders.base_builder import BasePlanBuilder
+from application.preset_model import PresetModel
+from application.rerun_selection_builder import build_rerun_selection
+from application.preset_serializer import PresetSerializer
 from application.test_type_symbols import (
     DEFAULT_TEST_ORDER,
     canonical_supported_test_types,
@@ -39,7 +47,31 @@ class PlanService:
         self.run_repo = run_repo
         self.ruleset_dir = ruleset_dir
         self._ruleset_cache: Dict[str, RuleSet] = {}
+        self._plan_builder_registry = PlanBuilderRegistry()
         self.query_service = PlanQueryService(self)
+
+    def registered_plan_builder_tech_ids(self) -> Tuple[str, ...]:
+        return tuple(self._plan_builder_registry.registered_tech_ids())
+
+    def resolve_plan_builder(self, model: PresetModel) -> Optional[BasePlanBuilder]:
+        return self._plan_builder_registry.resolve_builder(model)
+
+    def build_preview_steps_from_model(self, model: PresetModel) -> List[Dict[str, Any]]:
+        builder = self.resolve_plan_builder(model)
+        if builder is None:
+            return []
+        return list(builder.build_steps(model))
+
+    def build_preview_steps_from_preset_dict(self, preset_json: Dict[str, Any]) -> List[Dict[str, Any]]:
+        model = PresetSerializer.from_dict(dict(preset_json or {}))
+        return self.build_preview_steps_from_model(model)
+
+    def build_preview_steps_from_preset_id(self, preset_id: str) -> List[Dict[str, Any]]:
+        pj = self.repo.load_preset(preset_id=preset_id)
+        migrated, changed = migrate_preset_to_latest(pj)
+        if changed:
+            self.repo.update_preset_json(preset_id=preset_id, preset_json=migrated)
+        return self.build_preview_steps_from_preset_dict(migrated)
 
     # ---------- RuleSet ----------
 
@@ -84,7 +116,10 @@ class PlanService:
                 test_contracts=raw.get("test_contracts") or {},
             ),
             plan_modes=plan_modes,          # <- 변경됨 (PlanMode dict)
-            test_contracts=normalize_test_contracts(raw.get("test_contracts") or {}),
+            test_contracts=project_ruleset_test_contracts(
+                raw.get("test_contracts") or {},
+                tests_supported=collect_ruleset_test_types(raw),
+            ),
             test_labels={str(k): str(v) for k, v in (raw.get("test_labels", {}) or {}).items()},
             voltage_policy=normalize_voltage_policy(raw.get("voltage_policy") or {}),
             data_rate_policy=normalize_data_rate_policy(raw.get("data_rate_policy") or {}),
@@ -151,26 +186,79 @@ class PlanService:
     from typing import Tuple, List
 
     def build_recipe_from_preset(self, preset_id: str):
-        preset = self.load_preset_obj(preset_id)
-        if preset is None:
+        raw_preset = self.load_preset_obj(preset_id)
+        if raw_preset is None:
             raise KeyError(f"Preset not found: {preset_id}")
+
+        preset = raw_preset
+        migration = None
 
         ruleset = self.load_ruleset(preset.ruleset_id)  # 이제 RuleSet 객체로 확정
 
+        effective = build_effective_preset(raw_preset, ruleset)
+        migration = effective.migration
         self.validate_preset_against_ruleset(preset, ruleset)
+
+        builder_preview_tech = ""
+        try:
+            preview_model = PresetSerializer.from_dict({
+                "name": raw_preset.name,
+                "ruleset_id": raw_preset.ruleset_id,
+                "ruleset_version": raw_preset.ruleset_version,
+                "selection": dict(raw_preset.selection or {}),
+                "description": raw_preset.description,
+            })
+            preview_builder = self.resolve_plan_builder(preview_model)
+            if preview_builder is not None:
+                builder_preview_tech = type(preview_builder).__name__
+        except Exception:
+            builder_preview_tech = ""
+
+        if migration.has_blocking_errors:
+            raise ValueError(
+                "Preset is invalid against the current RuleSet.\n"
+                + summarize_migration_result(migration)
+            )
 
         selection = dict(preset.selection or {})
         log.info(
-            "build_recipe_from_preset | preset_id=%s preset_name=%s ruleset=%s shared_profile=%s per_test_profiles=%s source=db:preset_json",
+            "build_recipe_from_preset | preset_id=%s preset_name=%s ruleset=%s shared_profile=%s per_test_profiles=%s source=db:preset_json migration=%s plan_builder=%s",
             preset_id,
             preset.name,
             preset.ruleset_id,
             selection.get("measurement_profile_name", ""),
             selection.get("instrument_profile_by_test", {}),
+            summarize_migration_result(migration) if migration is not None else "status=clean",
+            builder_preview_tech or "legacy",
         )
-        recipe = build_recipe(ruleset, preset)
+        recipe = build_recipe(ruleset, effective.effective_preset)
+        recipe = replace(
+            recipe,
+            meta={
+                **dict(recipe.meta or {}),
+                "preset_migration_status": migration.status if migration is not None else "clean",
+                "preset_migration_auto_fixes": list(migration.auto_fixes) if migration is not None else [],
+                "preset_migration_warnings": list(migration.warnings) if migration is not None else [],
+                "preset_migration_disabled_items": [
+                    {
+                        "field": item.field,
+                        "value": item.value,
+                        "reason": item.reason,
+                    }
+                    for item in (migration.disabled_items if migration is not None else [])
+                ],
+                "preset_migration_errors": list(migration.errors) if migration is not None else [],
+                "effective_test_types": normalize_test_type_list(
+                    (effective.effective_preset.selection or {}).get("test_types") or []
+                ),
+                "raw_test_types": normalize_test_type_list(
+                    (raw_preset.selection or {}).get("test_types") or []
+                ),
+                "plan_builder": builder_preview_tech,
+            },
+        )
         overrides = self.load_override_objs(preset_id) or []
-        return ruleset, preset, recipe, overrides
+        return ruleset, raw_preset, recipe, overrides
 
     def iter_cases(
         self,
@@ -348,23 +436,15 @@ class PlanService:
         if not failed:
             raise ValueError("No FAIL cases found in this run.")
 
-        # 실패 케이스에서 필요한 최소 정보만 모아서 re-run selection 구성
-        test_types = normalize_test_type_list(sorted({r["test_type"] for r in failed}))
-        bw_list = sorted({int(r["bw_mhz"]) for r in failed})
-        channels = sorted({int(r["channel"]) for r in failed})
-
-        # base preset이 신포맷이면 selection을 복사, 구포맷이면 base 자체를 selection으로 취급
         if "selection" in base:
-            selection = dict(base["selection"])
+            base_selection = dict(base["selection"])
         else:
-            selection = dict(base)
+            base_selection = dict(base)
 
-        selection["test_types"] = test_types
-        selection["bandwidth_mhz"] = bw_list
-        selection["channels"] = {
-            "policy": "CUSTOM_LIST",
-            "channels": channels
-        }
+        selection = build_rerun_selection(
+            base_selection=base_selection,
+            selected_rows=failed,
+        )
 
         rerun_name = f"RERUN_{run_id[:8]}_{base.get('name', 'preset')}"
         rerun_json = {
@@ -391,36 +471,24 @@ class PlanService:
         selected_rows: List[Dict[str, Any]],
     ) -> str:
         """
-        selected_rows: Results 테이블의 선택된 row dict 목록
-        반드시 포함: test_type, channel, bw_mhz
-        band/standard는 base preset에서 가져옴(선택 row에 있어도 무방)
+        selected_rows: Results ?????? ?????row dict ???
+        ????????: test_type, channel, bw_mhz
+        band/standard??base preset??? ?????(??? row??????????)
         """
         if not selected_rows:
             raise ValueError("No rows selected.")
 
         base = self.repo.load_preset(preset_id=base_preset_id)
 
-        # base preset이 신포맷이면 selection을 복사, 구포맷이면 base 자체를 selection으로 취급
         if "selection" in base:
-            selection = dict(base["selection"])
+            base_selection = dict(base["selection"])
         else:
-            selection = dict(base)
+            base_selection = dict(base)
 
-        # 선택된 row에서 필요한 값들 집계
-        test_types = normalize_test_type_list(sorted({r["test_type"] for r in selected_rows if r.get("test_type")}))
-        bw_list = sorted({int(r["bw_mhz"]) for r in selected_rows if r.get("bw_mhz") is not None})
-        channels = sorted({int(r["channel"]) for r in selected_rows if r.get("channel") is not None})
-
-        if not test_types or not bw_list or not channels:
-            raise ValueError("Selected rows must include test_type, bw_mhz, channel.")
-
-        # selection을 re-run 형태로 덮어쓰기
-        selection["test_types"] = test_types
-        selection["bandwidth_mhz"] = bw_list
-        selection["channels"] = {
-            "policy": "CUSTOM_LIST",
-            "channels": channels
-        }
+        selection = build_rerun_selection(
+            base_selection=base_selection,
+            selected_rows=selected_rows,
+        )
 
         base_name = base.get("name", "preset")
         rerun_name = f"RERUN_SEL_{base_name}"
@@ -530,8 +598,6 @@ class PlanService:
             if ts in supported_keys:
                 continue
             unsupported.append(t)
-        if unsupported:
-            raise ValueError(f"Unsupported test_types in band '{band}': {unsupported}. Supported: {band_info.tests_supported}")
 
         if wlan:
             channel_plan = list(wlan.get("channel_plan") or [])
@@ -591,6 +657,13 @@ class PlanService:
                 "measurement_profile_source": r.get("measurement_profile_source", ""),
                 "measured_value": r.get("measured_value"),
                 "limit_value": r.get("limit_value"),
+                "raw_measured_value": r.get("raw_measured_value"),
+                "applied_correction_db": r.get("applied_correction_db"),
+                "correction_profile_name": r.get("correction_profile_name", ""),
+                "correction_mode": r.get("correction_mode", ""),
+                "correction_bound_path": r.get("correction_bound_path", ""),
+                "correction_breakdown": dict(r.get("correction_breakdown") or {}),
+                "correction_applied": bool(r.get("correction_applied")),
                 "screenshot_path": r.get("screenshot_path", ""),
                 "screenshot_abs_path": r.get("screenshot_abs_path", ""),
                 "has_screenshot": bool(r.get("has_screenshot")),
@@ -700,6 +773,10 @@ class PlanService:
                 "target_voltage_v_b": b.get("target_voltage_v"),
                 "target_voltage_v_display_a": a.get("target_voltage_v"),
                 "target_voltage_v_display_b": b.get("target_voltage_v"),
+                "correction_profile_name_a": a.get("correction_profile_name", ""),
+                "correction_profile_name_b": b.get("correction_profile_name", ""),
+                "correction_bound_path_a": a.get("correction_bound_path", ""),
+                "correction_bound_path_b": b.get("correction_bound_path", ""),
                 "changed": (
                     (status_a != status_b)
                     or (delta_value != "" and delta_value != 0)

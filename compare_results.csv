@@ -1,0 +1,7 @@
+﻿Test,Band,Standard,Data Rate,BW(MHz),CH,Voltage Cond,Voltage (V),Run A,Run B,Delta,Unit,Status A,Status B,Difference A,Difference B,Limit A,Limit B,Comparator A,Comparator B,Screenshot A,Screenshot B
+OBW,5G,802.11n,,20,36,HIGH,4.18,,17.68,,MHz,MISSING,PASS,,-2.32 MHz,,20.0,,upper_limit,,Yes
+OBW,5G,802.11n,,20,36,LOW,3.42,,17.67,,MHz,MISSING,PASS,,-2.33 MHz,,20.0,,upper_limit,,Yes
+OBW,5G,802.11n,,20,36,NOMINAL,3.8,,17.68,,MHz,MISSING,PASS,,-2.32 MHz,,20.0,,upper_limit,,Yes
+PSD,5G,802.11n,,20,36,HIGH,4.18,,2.10,,mW/MHz,MISSING,PASS,,-7.90 mW/MHz,,10.0,,upper_limit,,Yes
+PSD,5G,802.11n,,20,36,LOW,3.42,2.04,2.08,0.05,mW/MHz,PASS,PASS,-7.96 mW/MHz,-7.92 mW/MHz,10.0,10.0,upper_limit,upper_limit,Yes,Yes
+PSD,5G,802.11n,,20,36,NOMINAL,3.8,2.01,2.09,0.08,mW/MHz,PASS,PASS,-7.99 mW/MHz,-7.91 mW/MHz,10.0,10.0,upper_limit,upper_limit,Yes,Yes

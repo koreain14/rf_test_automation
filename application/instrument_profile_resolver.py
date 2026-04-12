@@ -175,7 +175,7 @@ class InstrumentProfileResolver:
             "PSD_DEFAULT": "PSD",
             "OBW_DEFAULT": "OBW",
             "SP_DEFAULT": "SP",
-            "TXP_DEFAULT": "CHANNEL_POWER",
+            "TXP_DEFAULT": "TXP",
         }
         if normalized in mapping:
             return mapping[normalized]

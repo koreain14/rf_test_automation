@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
@@ -55,7 +56,7 @@ class CaseTableModel(QAbstractTableModel):
             row.get("channel", ""),
             row.get("frequency_mhz", row.get("center_freq_mhz", "")),
             row.get("bandwidth_mhz", row.get("bw_mhz", "")),
-            row.get("case_key", row.get("key", row.get("id", ""))),
+            self._format_case_key_display(row.get("case_key", row.get("key", row.get("id", "")))),
         ]
         return values[col] if 0 <= col < len(values) else None
 
@@ -86,6 +87,19 @@ class CaseTableModel(QAbstractTableModel):
 
     def rows(self) -> List[Dict[str, Any]]:
         return list(self._rows)
+
+    @staticmethod
+    def _format_case_key_display(value: Any) -> str:
+        text = str(value or "")
+
+        def _replace(match: re.Match[str]) -> str:
+            raw = match.group(1)
+            try:
+                return f"TV:{float(raw):.2f}"
+            except Exception:
+                return match.group(0)
+
+        return re.sub(r"TV:([+-]?\d+(?:\.\d+)?)", _replace, text)
 
 
 class GroupSummaryTableModel(QAbstractTableModel):

@@ -1,6 +1,6 @@
 {
   "name": "KC_WLAN_5G_PSD_OBW",
-  "ruleset_id": "KC_WLAN",
+  "ruleset_id": "NEW_WLAN_RULESET",
   "ruleset_version": "2026.02",
   "selection": {
     "band": "5G",
@@ -49,6 +49,13 @@
             20,
             40,
             80
+          ]
+        },
+        {
+          "standard": "802.11a",
+          "phy_mode": "OFDM",
+          "bandwidths_mhz": [
+            20
           ]
         }
       ],

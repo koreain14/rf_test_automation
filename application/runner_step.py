@@ -32,10 +32,22 @@ class StepRunner:
     def run_case(self, run_id: str, result_id: str, case, inst) -> dict:
         ctx = CaseContext(case=case)
         instrument_settings = self.settings_store.load_instrument_settings()
+        case_tags = dict(getattr(case, "tags", {}) or {})
         ctx.values["run_id"] = str(run_id or "")
         ctx.values["result_id"] = str(result_id or "")
         ctx.values["screenshot_root_dir"] = str(instrument_settings.get("screenshot_root_dir", "") or "").strip()
         ctx.values["screenshot_settle_ms"] = int(instrument_settings.get("screenshot_settle_ms", 300) or 300)
+        ctx.values["standard"] = str(getattr(case, "standard", "") or "")
+        ctx.values["band"] = str(getattr(case, "band", "") or "")
+        ctx.values["channel"] = getattr(case, "channel", 0)
+        ctx.values["bw_mhz"] = getattr(case, "bw_mhz", 0)
+        ctx.values["phy_mode"] = str(case_tags.get("phy_mode", "") or "")
+        ctx.values["data_rate"] = str(case_tags.get("data_rate", "") or "")
+        ctx.values["voltage_condition"] = str(case_tags.get("voltage_condition", "") or "")
+        ctx.values["nominal_voltage_v"] = case_tags.get("nominal_voltage_v")
+        ctx.values["target_voltage_v"] = case_tags.get("target_voltage_v")
+        ctx.values["axis_values"] = dict(case_tags.get("axis_values", {}) or {})
+        ctx.values["axis_order"] = list(case_tags.get("axis_order", []) or [])
         instrument_snapshot = dict(getattr(case, "instrument", {}) or {})
         requested_profile_name = normalize_profile_name(
             instrument_snapshot.get("profile_name")
@@ -57,15 +69,26 @@ class StepRunner:
         )
         ctx.values["measurement_profile_source"] = ctx.values["resolved_profile"].get("profile_source", "")
         log.info(
+            "procedure ctx seed | case=%s test_type=%s standard=%s data_rate=%s voltage_condition=%s nominal_voltage_v=%s target_voltage_v=%s axis_values=%s",
+            getattr(case, "key", ""),
+            getattr(case, "test_type", ""),
+            ctx.values["standard"],
+            ctx.values["data_rate"],
+            ctx.values["voltage_condition"],
+            ctx.values["nominal_voltage_v"],
+            ctx.values["target_voltage_v"],
+            ctx.values["axis_values"],
+        )
+        log.info(
             "run_case measurement profile resolved | case=%s test_type=%s ruleset_id=%s band=%s device_class=%s requested_profile=%s case_profile=%s tag_profile=%s resolved_profile=%s profile_source=%s instrument_snapshot_source=%s runtime_profile_precedence=%s legacy_fallback_fields=%s ignored_snapshot_fields=%s trace_mode=%s detector=%s span_hz=%s rbw_hz=%s vbw_hz=%s sweep_time_s=%s avg_count=%s average_enabled=%s psd_method=%s psd_result_unit=%s psd_limit_value=%s psd_limit_unit=%s",
             getattr(case, "key", ""),
             getattr(case, "test_type", ""),
-            dict(getattr(case, "tags", {}) or {}).get("ruleset_id", ""),
+            case_tags.get("ruleset_id", ""),
             getattr(case, "band", ""),
-            dict(getattr(case, "tags", {}) or {}).get("device_class", ""),
+            case_tags.get("device_class", ""),
             requested_profile_name,
             instrument_snapshot.get("profile_name", ""),
-            dict(getattr(case, "tags", {}) or {}).get("measurement_profile_name", ""),
+            case_tags.get("measurement_profile_name", ""),
             ctx.values["resolved_profile"].get("profile_name", ""),
             ctx.values["resolved_profile"].get("profile_source", ""),
             ctx.values["resolved_profile"].get("instrument_snapshot_source", ""),
@@ -80,10 +103,10 @@ class StepRunner:
             ctx.values["resolved_profile"].get("sweep_time_s", ""),
             ctx.values["resolved_profile"].get("avg_count", ""),
             ctx.values["resolved_profile"].get("average_enabled", ctx.values["resolved_profile"].get("average", "")),
-            dict(getattr(case, "tags", {}) or {}).get("psd_method", ""),
-            dict(getattr(case, "tags", {}) or {}).get("psd_result_unit", ""),
-            dict(getattr(case, "tags", {}) or {}).get("psd_limit_value", ""),
-            dict(getattr(case, "tags", {}) or {}).get("psd_limit_unit", ""),
+            case_tags.get("psd_method", ""),
+            case_tags.get("psd_result_unit", ""),
+            case_tags.get("psd_limit_value", ""),
+            case_tags.get("psd_limit_unit", ""),
         )
         procedure = self.procedures.get_procedure(case.test_type)
         ctx.values["procedure_name"] = getattr(procedure, "name", case.test_type)

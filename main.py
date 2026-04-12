@@ -58,7 +58,7 @@ def build_instrument_manager() -> InstrumentManager:
 
     return InstrumentManager(factory)
 
-
+ 
 def main():
     setup_logging()
     install_global_excepthook()

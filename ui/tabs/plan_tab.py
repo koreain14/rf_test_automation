@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTableView,
     QTreeView,
@@ -45,11 +46,11 @@ class PlanTab(QWidget):
 
         filter_row = QHBoxLayout()
         self.plan_filter_band = QComboBox()
-        self.plan_filter_band.addItems(["", "2.4G", "5G", "6G"])
+        self.plan_filter_band.addItem("")
         self.plan_filter_standard = QComboBox()
-        self.plan_filter_standard.addItems(["", "802.11b", "802.11g", "802.11n", "802.11ax", "802.11be"])
+        self.plan_filter_standard.addItem("")
         self.plan_filter_bw = QComboBox()
-        self.plan_filter_bw.addItems(["", "20", "40", "80", "160", "320"])
+        self.plan_filter_bw.addItem("")
         self.plan_filter_test = QComboBox()
         self.plan_filter_test.addItems(["", *PLAN_FILTER_TEST_TYPES])
         self.plan_filter_channel_from = QLineEdit()
@@ -66,6 +67,18 @@ class PlanTab(QWidget):
         self.btn_clear_filter = QPushButton("Clear Filter")
         self.btn_run_filtered = QPushButton("Run Filtered")
         self.btn_run_filtered.setToolTip("현재 필터된 케이스만 실행됩니다")
+        self.plan_filter_band.setMinimumWidth(120)
+        self.plan_filter_standard.setMinimumWidth(180)
+        self.plan_filter_bw.setMinimumWidth(90)
+        self.plan_filter_test.setMinimumWidth(120)
+        self.plan_filter_enabled.setMinimumWidth(100)
+        self.plan_filter_search.setMinimumWidth(220)
+        self.plan_filter_band.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.plan_filter_standard.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.plan_filter_bw.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.plan_filter_test.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.plan_filter_enabled.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.plan_filter_search.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         for label, widget in (
             ("Band", self.plan_filter_band),
             ("Standard", self.plan_filter_standard),

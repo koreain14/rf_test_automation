@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from application.correction_runtime import format_correction_summary, normalize_correction_meta
+
 
 def _as_dict(meta: dict | None) -> dict:
     return dict(meta or {})
@@ -32,6 +34,8 @@ def get_motion(meta: dict | None) -> dict:
     return dict(data) if isinstance(data, dict) else {}
 
 
+def get_correction(meta: dict | None) -> dict:
+    return normalize_correction_meta(_as_dict(meta))
 
 
 def get_dut_control_mode(meta: dict | None) -> str:
@@ -95,15 +99,19 @@ def build_run_display_context(meta: dict | None) -> Dict[str, Any]:
     power = get_power(m)
     motion = get_motion(m)
     dut_control_mode = get_dut_control_mode(m)
+    correction = get_correction(m)
+    correction_text = format_correction_summary(m)
     return {
         "switch_path": switch_path,
         "antenna": antenna,
         "power": power,
         "motion": motion,
         "dut_control_mode": dut_control_mode,
+        "correction": correction,
         "power_text": format_power(power),
         "motion_text": format_motion(motion),
         "dut_control_mode_text": format_dut_control_mode(dut_control_mode),
+        "correction_text": correction_text,
     }
 
 
@@ -120,6 +128,8 @@ def build_status_suffix(meta: dict | None) -> str:
         parts.append(ctx["motion_text"])
     if ctx["dut_control_mode_text"]:
         parts.append(f"DUT:{ctx['dut_control_mode_text']}")
+    if ctx.get("correction_text"):
+        parts.append(str(ctx.get("correction_text")))
     return (" | " + " | ".join(parts)) if parts else ""
 
 
@@ -132,4 +142,6 @@ def build_progress_suffix(meta: dict | None) -> str:
         parts.append(ctx["power_text"].replace("PSU ", "PSU:"))
     if ctx["dut_control_mode_text"]:
         parts.append(f"DUT:{ctx['dut_control_mode_text']}")
+    if ctx.get("correction_text"):
+        parts.append(str(ctx.get("correction_text")))
     return (" | " + " | ".join(parts)) if parts else ""

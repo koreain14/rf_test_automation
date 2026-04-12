@@ -283,5 +283,15 @@ def build_consumable_measurement_profile(
         merged["test_type"] = normalized_test_type
     if measurement_field_sources:
         merged["measurement_field_sources"] = measurement_field_sources
+    merged["requested_profile_name"] = requested_profile_name
+    merged["compat_profile_name"] = compat_profile_name
+    merged["measurement_profile_precedence"] = "measurement_profile_wins_over_instrument_snapshot"
+    merged["measurement_profile_precedence_detail"] = {
+        "requested_profile_name": requested_profile_name,
+        "compat_profile_name": compat_profile_name,
+        "instrument_snapshot_source": merged.get("instrument_snapshot_source", ""),
+        "legacy_instrument_fallback_fields": list(merged.get("legacy_instrument_fallback_fields") or []),
+        "ignored_instrument_snapshot_fields": list(merged.get("ignored_instrument_snapshot_fields") or []),
+    }
 
     return merged
