@@ -1,11 +1,14 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import ipaddress
 import json
 
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGroupBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -13,6 +16,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QScrollArea,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -55,8 +60,11 @@ class DeviceManagerTab(QWidget):
         self.scan_table = QTableWidget(0, 6)
         self.scan_table.setHorizontalHeaderLabels(["Resource", "Model", "Serial", "Type", "Driver", "Status"])
         self.scan_table.horizontalHeader().setStretchLastSection(True)
+        self.scan_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.scan_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.scan_table.setMinimumHeight(120)
         layout.addWidget(QLabel("Scan Results"))
-        layout.addWidget(self.scan_table)
+        layout.addWidget(self.scan_table, 1)
 
         hint = QLabel("Tip: click a scan row to auto-fill the form, double-click to add it directly as a device. Test also works on unsaved form values.")
         layout.addWidget(hint)
@@ -65,6 +73,9 @@ class DeviceManagerTab(QWidget):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Name", "Type", "Driver", "Resource", "Enabled"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setMinimumHeight(220)
         grid.addWidget(self.table, 0, 0)
 
         editor = QWidget()
@@ -75,20 +86,50 @@ class DeviceManagerTab(QWidget):
         self.driver_combo = QComboBox()
         self.driver_combo.addItems(DRIVER_CHOICES)
         self.resource_edit = QLineEdit()
+
+        self.tcpip_box = QGroupBox("Manual TCPIP")
+        tcpip_form = QFormLayout(self.tcpip_box)
+        self.tcpip_ip_edit = QLineEdit()
+        self.tcpip_ip_edit.setPlaceholderText("192.168.0.10")
+        self.tcpip_mode_combo = QComboBox()
+        self.tcpip_mode_combo.addItems(["INSTR", "SOCKET"])
+        self.tcpip_port_spin = QSpinBox()
+        self.tcpip_port_spin.setRange(1, 65535)
+        self.tcpip_port_spin.setValue(5025)
+        self.tcpip_resource_preview = QLineEdit()
+        self.tcpip_resource_preview.setReadOnly(True)
+        self.btn_build_tcpip = QPushButton("Build Resource")
+        self.btn_test_tcpip = QPushButton("Test TCPIP")
+        self.btn_use_tcpip = QPushButton("Use In Form")
+
+        tcpip_btns = QHBoxLayout()
+        tcpip_btns.addWidget(self.btn_build_tcpip)
+        tcpip_btns.addWidget(self.btn_test_tcpip)
+        tcpip_btns.addWidget(self.btn_use_tcpip)
+
+        tcpip_form.addRow("IP Address", self.tcpip_ip_edit)
+        tcpip_form.addRow("Connection", self.tcpip_mode_combo)
+        tcpip_form.addRow("Port", self.tcpip_port_spin)
+        tcpip_form.addRow("Resource", self.tcpip_resource_preview)
+        tcpip_form.addRow(tcpip_btns)
+
         self.enabled_check = QCheckBox("Enabled")
         self.enabled_check.setChecked(True)
         self.desc_edit = QLineEdit()
         self.serial_edit = QLineEdit()
         self.options_edit = QPlainTextEdit()
         self.options_edit.setPlaceholderText('{"timeout_ms": 10000}')
+        self.options_edit.setMinimumHeight(70)
         self.ports_edit = QPlainTextEdit()
         self.ports_edit.setPlaceholderText('[{"name": "ANT1", "command": "ROUTE 1"}]')
+        self.ports_edit.setMinimumHeight(80)
         self.btn_edit_ports = QPushButton("Edit Switch Ports...")
 
         form.addRow("Name", self.name_edit)
         form.addRow("Type", self.type_combo)
         form.addRow("Driver", self.driver_combo)
         form.addRow("Resource", self.resource_edit)
+        form.addRow("", self.tcpip_box)
         form.addRow("", self.enabled_check)
         form.addRow("Description", self.desc_edit)
         form.addRow("Serial", self.serial_edit)
@@ -103,18 +144,24 @@ class DeviceManagerTab(QWidget):
         btns.addWidget(self.btn_save)
         form.addRow(btns)
 
-        grid.addWidget(editor, 0, 1)
+        editor_scroll = QScrollArea()
+        editor_scroll.setWidgetResizable(True)
+        editor_scroll.setWidget(editor)
+        editor_scroll.setMinimumWidth(420)
+        grid.addWidget(editor_scroll, 0, 1)
+
         grid.setColumnStretch(0, 3)
         grid.setColumnStretch(1, 2)
         layout.addWidget(QLabel("Registered Devices"))
-        layout.addLayout(grid, 1)
+        layout.addLayout(grid, 2)
 
         self.status_label = QLabel("Ready")
         self.output_box = QPlainTextEdit()
         self.output_box.setReadOnly(True)
-        self.output_box.setMinimumHeight(120)
+        self.output_box.setMinimumHeight(90)
+        self.output_box.setMaximumHeight(140)
         layout.addWidget(self.status_label)
-        layout.addWidget(self.output_box)
+        layout.addWidget(self.output_box, 1)
 
         self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
         self.scan_table.itemSelectionChanged.connect(self.on_scan_selection_changed)
@@ -128,12 +175,76 @@ class DeviceManagerTab(QWidget):
         self.btn_cancel_scan.clicked.connect(self.on_cancel_scan)
         self.btn_edit_ports.clicked.connect(self.on_edit_ports)
         self.btn_test.clicked.connect(self.on_test)
+        self.tcpip_mode_combo.currentTextChanged.connect(self._sync_tcpip_mode_state)
+        self.btn_build_tcpip.clicked.connect(self.on_build_tcpip)
+        self.btn_test_tcpip.clicked.connect(self.on_test_tcpip)
+        self.btn_use_tcpip.clicked.connect(self.on_use_tcpip)
+
+        self._sync_tcpip_mode_state()
+        self._refresh_tcpip_resource_preview()
 
     def _parse_json_text(self, text: str, fallback):
         raw = text.strip()
         if not raw:
             return fallback
         return json.loads(raw)
+
+    def _sync_tcpip_mode_state(self) -> None:
+        is_socket = self.tcpip_mode_combo.currentText().upper() == "SOCKET"
+        self.tcpip_port_spin.setEnabled(is_socket)
+        self._refresh_tcpip_resource_preview()
+
+    def _validate_tcpip_manual_inputs(self) -> tuple[str, str, int | None]:
+        raw_ip = self.tcpip_ip_edit.text().strip()
+        if not raw_ip:
+            raise ValueError("IP address is required.")
+
+        try:
+            ip_text = str(ipaddress.ip_address(raw_ip))
+        except ValueError as exc:
+            raise ValueError("Enter a valid IPv4 or IPv6 address.") from exc
+
+        mode = self.tcpip_mode_combo.currentText().upper()
+        if mode == "SOCKET":
+            return ip_text, mode, int(self.tcpip_port_spin.value())
+        return ip_text, "INSTR", None
+
+    def _build_tcpip_resource_string(self) -> str:
+        ip_text, mode, port = self._validate_tcpip_manual_inputs()
+        if mode == "SOCKET":
+            return f"TCPIP0::{ip_text}::{port}::SOCKET"
+        return f"TCPIP0::{ip_text}::inst0::INSTR"
+
+    def _refresh_tcpip_resource_preview(self) -> str:
+        try:
+            resource = self._build_tcpip_resource_string()
+        except Exception:
+            resource = ""
+        self.tcpip_resource_preview.setText(resource)
+        return resource
+
+    def _build_manual_probe_result(self, resource: str) -> dict:
+        result = dict(self.instrument_manager.discovery.identify_tcpip_resource(resource, timeout_ms=10000) or {})
+        result["resource"] = resource
+        return result
+
+    def _apply_manual_probe_result(self, result: dict) -> None:
+        self.resource_edit.setText(str(result.get("resource", "")).strip())
+        self.serial_edit.setText(str(result.get("serial_number", "")).strip())
+
+        guessed_type = str(result.get("type", "")).strip()
+        guessed_driver = str(result.get("driver", "")).strip()
+        if guessed_type and guessed_type != "unknown" and self.type_combo.findText(guessed_type) >= 0:
+            self.type_combo.setCurrentText(guessed_type)
+        if guessed_driver and self.driver_combo.findText(guessed_driver) >= 0:
+            self.driver_combo.setCurrentText(guessed_driver)
+
+        idn = str(result.get("idn", "")).strip()
+        if idn:
+            self.desc_edit.setText(idn)
+
+        if not self.name_edit.text().strip() and (guessed_type or guessed_driver or idn):
+            self.name_edit.setText(self._suggest_name_from_scan(result))
 
     def _device_from_form(self) -> DeviceInfo:
         return DeviceInfo(
@@ -159,6 +270,10 @@ class DeviceManagerTab(QWidget):
             self.serial_edit.clear()
             self.options_edit.setPlainText("{}")
             self.ports_edit.setPlainText("[]")
+            self.tcpip_ip_edit.clear()
+            self.tcpip_mode_combo.setCurrentText("INSTR")
+            self.tcpip_port_spin.setValue(5025)
+            self._refresh_tcpip_resource_preview()
             return
 
         self.name_edit.setText(device.name)
@@ -170,6 +285,7 @@ class DeviceManagerTab(QWidget):
         self.serial_edit.setText(getattr(device, "serial_number", ""))
         self.options_edit.setPlainText(json.dumps(device.options, ensure_ascii=False, indent=2))
         self.ports_edit.setPlainText(json.dumps(device.ports, ensure_ascii=False, indent=2))
+        self._refresh_tcpip_resource_preview()
 
     def reload_devices(self) -> None:
         devices = self.device_registry.list_devices()
@@ -206,7 +322,10 @@ class DeviceManagerTab(QWidget):
         base_name = base_name.replace(" ", "_").replace("-", "_")
 
         existing = {d.name.upper() for d in self.device_registry.list_devices()}
-        idx = 1
+        if base_name.upper() not in existing:
+            return base_name
+
+        idx = 2
         while True:
             candidate = f"{base_name}_{idx:02d}"
             if candidate.upper() not in existing:
@@ -228,8 +347,7 @@ class DeviceManagerTab(QWidget):
         if idn:
             self.desc_edit.setText(idn)
 
-        if not self.name_edit.text().strip():
-            self.name_edit.setText(self._suggest_name_from_scan(r))
+        self.name_edit.setText(self._suggest_name_from_scan(r))
 
     def on_table_selection_changed(self) -> None:
         name = self.selected_device_name()
@@ -352,6 +470,61 @@ class DeviceManagerTab(QWidget):
             self.ports_edit.setPlainText(json.dumps(ports, ensure_ascii=False, indent=2))
             self.status_label.setText(f"Switch ports updated: {len(ports)} row(s)")
 
+    def on_build_tcpip(self) -> None:
+        try:
+            resource = self._build_tcpip_resource_string()
+        except Exception as e:
+            self.status_label.setText("TCPIP resource invalid")
+            self.tcpip_resource_preview.clear()
+            QMessageBox.warning(self, "Build TCPIP resource", str(e))
+            return
+
+        self.tcpip_resource_preview.setText(resource)
+        self.status_label.setText("TCPIP resource ready")
+        self.output_box.setPlainText(
+            json.dumps(
+                {
+                    "resource": resource,
+                    "connection_type": self.tcpip_mode_combo.currentText().upper(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+    def on_use_tcpip(self) -> None:
+        try:
+            resource = self._build_tcpip_resource_string()
+        except Exception as e:
+            QMessageBox.warning(self, "Use TCPIP resource", str(e))
+            return
+
+        self.tcpip_resource_preview.setText(resource)
+        self.resource_edit.setText(resource)
+        self.status_label.setText("TCPIP resource applied to form")
+
+    def on_test_tcpip(self) -> None:
+        try:
+            resource = self._build_tcpip_resource_string()
+        except Exception as e:
+            self.status_label.setText("TCPIP test failed")
+            self.tcpip_resource_preview.clear()
+            QMessageBox.warning(self, "Test TCPIP", str(e))
+            return
+
+        self.tcpip_resource_preview.setText(resource)
+        result = self._build_manual_probe_result(resource)
+        self.output_box.setPlainText(json.dumps(result, ensure_ascii=False, indent=2))
+
+        status = str(result.get("status", "")).strip()
+        if status == "OK":
+            self._apply_manual_probe_result(result)
+            self.status_label.setText("TCPIP connection OK")
+            return
+
+        self.status_label.setText("TCPIP connection failed")
+        QMessageBox.warning(self, "Test TCPIP", status or "Unknown error")
+
     def on_test(self) -> None:
         selected_name = self.selected_device_name()
         if selected_name:
@@ -380,3 +553,6 @@ class DeviceManagerTab(QWidget):
         else:
             self.status_label.setText("Connection failed")
             QMessageBox.warning(self, "Test failed", result.get("error", "Unknown error"))
+
+
+

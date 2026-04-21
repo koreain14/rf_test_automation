@@ -5,7 +5,7 @@ from typing import Any, Dict, Tuple
 from application.correction_profile_model import CorrectionFactorSet, CorrectionProfileDocument
 
 
-_ALLOWED_TEST_TYPES = {"CHP", "PSD", "OBW", "TXP"}
+_ALLOWED_TEST_TYPES = {"CHP", "PSD", "TXP"}
 _UPPER_LIMIT_COMPARATORS = {"", "upper_limit", "max", "maximum", "lte", "le"}
 _LOWER_LIMIT_COMPARATORS = {"lower_limit", "min", "minimum", "gte", "ge"}
 

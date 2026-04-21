@@ -38,7 +38,7 @@ class KeysightPsdConfig:
     average_enabled: bool = False
     avg_count: int = 1
     atten_db: float = 10.0
-    ref_level_dbm: float = 20.0
+    ref_level_dbm: float = 10.0
 
 
 DEFAULT_SPAN_HZ_MIN = 20_000_000.0
@@ -47,10 +47,12 @@ DEFAULT_RBW_HZ_MAX = 300_000.0
 DEFAULT_SWEEP_TIME_S = 0.1
 DEFAULT_AVG_COUNT = 1
 DEFAULT_ATTEN_DB = 10.0
-DEFAULT_REF_LEVEL_DBM = 20.0
+DEFAULT_REF_LEVEL_DBM = 10.0
 DEFAULT_MODE_SETTLE_S = 0.05
 DEFAULT_POST_CONFIG_SETTLE_S = 0.02
 DEFAULT_POST_INIT_SETTLE_S = 0.05
+DEFAULT_MAX_WAIT_S = 60.0
+DEFAULT_INIT_SYNC_MARGIN_S = 2.0
 
 
 def _psd_unit_label(unit: str) -> str:
@@ -90,6 +92,24 @@ def _read_system_error_best_effort(inst: Any) -> str:
         return str(inst.query("SYST:ERR?") or "").strip()
     except Exception:
         return ""
+
+
+def _is_scpi_no_error(response: str) -> bool:
+    normalized = str(response or "").strip().upper().replace(" ", "")
+    if not normalized:
+        return False
+    return normalized.startswith("+0,") or normalized.startswith("0,") or "NOERROR" in normalized
+
+
+def _raise_on_scpi_write_error(inst: Any, *, stage: str, cmd: str) -> None:
+    system_error = _read_system_error_best_effort(inst)
+    if _is_scpi_no_error(system_error):
+        return
+    message = (
+        f"keysight psd SCPI write rejected | stage={stage} cmd={cmd} system_error={system_error or '(empty)'}"
+    )
+    log.error(message)
+    raise RuntimeError(message)
 
 
 class _temporary_timeout:
@@ -280,6 +300,7 @@ def _write_stage(inst: Any, stage: str, cmd: str) -> None:
     log.info("keysight psd SCPI write | stage=%s cmd=%s", stage, cmd)
     try:
         _safe_write(inst, cmd)
+        _raise_on_scpi_write_error(inst, stage=stage, cmd=cmd)
     except Exception:
         system_error = _read_system_error_best_effort(inst)
         log.exception("keysight psd SCPI write failed | stage=%s cmd=%s system_error=%s", stage, cmd, system_error)
@@ -532,9 +553,10 @@ def _configure_psd_measurement(
         ("sweep", f":SWE:TIME {_format_scpi_value(cfg.sweep_time_s)}"),
         ("atten", f":POW:ATT {_format_scpi_value(cfg.atten_db)}"),
         ("unit", f":UNIT:POW {scpi_power_unit}"),
-        ("display", f":DISP:WIND:TRAC:Y:RLEV {_format_scpi_value(cfg.ref_level_dbm)}"),
+        ("display_offset_reset", ":DISP:WIND:TRAC:Y:RLEV:OFFS 0"),
+        ("display", f":DISP:WIND:TRAC:Y:RLEV {_format_scpi_value(cfg.ref_level_dbm)} dBm"),
         ("average", f":AVER {_format_scpi_bool(cfg.average_enabled)}"),
-        ("trace", f":TRAC1:MODE {cfg.trace_mode}"),
+        ("trace", f":TRAC1:TYPE {cfg.trace_mode}"),
         ("detector", f":DET {cfg.detector}"),
     ]
     if cfg.average_enabled:
@@ -562,8 +584,10 @@ def _configure_psd_measurement(
         _write_stage(inst, stage, cmd)
         if cmd == ":ABOR":
             _sync_stage(inst, "post_abort", fallback_sleep_s=mode_settle_s)
-    _sync_stage(inst, "post_psd_config", fallback_sleep_s=post_config_settle_s)
-    _log_psd_apply_readback(inst)
+        if stage == "display":
+            time.sleep(1.0)
+    #_sync_stage(inst, "post_psd_config", fallback_sleep_s=post_config_settle_s)
+    #_log_psd_apply_readback(inst)
 
 
 def _parse_trace_points(response: str) -> list[float]:
@@ -600,22 +624,63 @@ def _fetch_trace(inst: Any) -> list[float]:
     raise RuntimeError(f"unable to read PSD trace from analyzer | responses={responses}")
 
 
+def _estimated_wait_seconds(cfg: KeysightPsdConfig, instrument_cfg: Dict[str, Any]) -> float:
+    configured = instrument_cfg.get("measurement_wait_s")
+    if configured not in (None, ""):
+        return max(1.0, _as_float(configured, DEFAULT_MAX_WAIT_S))
+
+    estimated = max(1.0, float(cfg.sweep_time_s))
+    if cfg.average_enabled:
+        estimated *= max(1.0, float(cfg.avg_count))
+    return max(2.0, min(max(estimated * 2.0, 2.0), DEFAULT_MAX_WAIT_S))
+
+
+def _clear_status_best_effort(inst: Any, *, stage: str) -> None:
+    try:
+        log.info("keysight psd SCPI clear status | stage=%s cmd=*CLS", stage)
+        _safe_write(inst, "*CLS")
+    except Exception as exc:
+        log.info("keysight psd SCPI clear status skipped | stage=%s err=%s", stage, exc)
+
+
 def _trigger_single_sweep(
     inst: Any,
     *,
+    cfg: KeysightPsdConfig,
+    instrument_cfg: Dict[str, Any],
+    request_timeout_ms: int,
     post_init_settle_s: float = DEFAULT_POST_INIT_SETTLE_S,
 ) -> None:
-    log.info("keysight psd acquisition trigger | mode=single_sweep cmd=:INIT:IMM")
+    estimated_wait_s = _estimated_wait_seconds(cfg, instrument_cfg)
+    sync_timeout_ms = max(
+        int(request_timeout_ms or 0),
+        int((estimated_wait_s + DEFAULT_INIT_SYNC_MARGIN_S) * 1000.0),
+    )
+    log.info(
+        "keysight psd acquisition trigger | mode=single_sweep cmd=:INIT:IMM estimated_wait_s=%s sync_timeout_ms=%s",
+        estimated_wait_s,
+        sync_timeout_ms,
+    )
     _write_stage(inst, "init", ":INIT:IMM")
-    _sync_stage(inst, "post_init", fallback_sleep_s=post_init_settle_s)
+    with _temporary_timeout(inst, sync_timeout_ms):
+        _sync_stage(inst, "post_init", fallback_sleep_s=max(post_init_settle_s, estimated_wait_s))
 
 
 def _acquire_marker_peak_value(
     inst: Any,
     *,
+    cfg: KeysightPsdConfig,
+    instrument_cfg: Dict[str, Any],
+    request_timeout_ms: int,
     post_init_settle_s: float = DEFAULT_POST_INIT_SETTLE_S,
 ) -> Dict[str, Any]:
-    _trigger_single_sweep(inst, post_init_settle_s=post_init_settle_s)
+    _trigger_single_sweep(
+        inst,
+        cfg=cfg,
+        instrument_cfg=instrument_cfg,
+        request_timeout_ms=request_timeout_ms,
+        post_init_settle_s=post_init_settle_s,
+    )
     try:
         _write_stage(inst, "marker_on", ":CALC:MARK1:STAT ON")
     except Exception as exc:
@@ -657,9 +722,18 @@ def _acquire_marker_peak_value(
 def _acquire_average_value(
     inst: Any,
     *,
+    cfg: KeysightPsdConfig,
+    instrument_cfg: Dict[str, Any],
+    request_timeout_ms: int,
     post_init_settle_s: float = DEFAULT_POST_INIT_SETTLE_S,
 ) -> Dict[str, Any]:
-    _trigger_single_sweep(inst, post_init_settle_s=post_init_settle_s)
+    _trigger_single_sweep(
+        inst,
+        cfg=cfg,
+        instrument_cfg=instrument_cfg,
+        request_timeout_ms=request_timeout_ms,
+        post_init_settle_s=post_init_settle_s,
+    )
     trace_points = _fetch_trace(inst)
     if not trace_points:
         raise RuntimeError("unable to compute PSD average from empty trace")
@@ -674,14 +748,29 @@ def _acquire_average_value(
 def _measure_psd_value_by_method(
     inst: Any,
     *,
+    cfg: KeysightPsdConfig,
+    instrument_cfg: Dict[str, Any],
     method: str,
+    request_timeout_ms: int,
     post_init_settle_s: float,
 ) -> Dict[str, Any]:
     normalized_method = normalize_psd_method(method) or PSD_METHOD_MARKER_PEAK
     if normalized_method == PSD_METHOD_MARKER_PEAK:
-        return _acquire_marker_peak_value(inst, post_init_settle_s=post_init_settle_s)
+        return _acquire_marker_peak_value(
+            inst,
+            cfg=cfg,
+            instrument_cfg=instrument_cfg,
+            request_timeout_ms=request_timeout_ms,
+            post_init_settle_s=post_init_settle_s,
+        )
     if normalized_method == PSD_METHOD_AVERAGE:
-        return _acquire_average_value(inst, post_init_settle_s=post_init_settle_s)
+        return _acquire_average_value(
+            inst,
+            cfg=cfg,
+            instrument_cfg=instrument_cfg,
+            request_timeout_ms=request_timeout_ms,
+            post_init_settle_s=post_init_settle_s,
+        )
     raise ValueError(f"unsupported PSD measurement method: {normalized_method}")
 
 
@@ -755,7 +844,10 @@ def measure_psd_keysight(
         )
         acquisition = _measure_psd_value_by_method(
             inst,
+            cfg=cfg,
+            instrument_cfg=instrument_cfg,
             method=policy_ctx["method"],
+            request_timeout_ms=timeout_ms,
             post_init_settle_s=post_init_settle_s,
         )
 
@@ -786,6 +878,7 @@ def measure_psd_keysight(
         canonical_value_dbm_per_mhz=policy_ctx["canonical_limit_value"],
         display_unit=display_payload["display_unit"],
     )
+    _clear_status_best_effort(inst, stage="pre_screenshot")
     screenshot = capture_analyzer_screenshot_best_effort(
         source,
         run_id=str((screenshot_context or {}).get("run_id", "") or ""),

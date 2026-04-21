@@ -28,6 +28,13 @@
     "wlan_expansion": {
       "mode_plan": [
         {
+          "standard": "802.11a",
+          "phy_mode": "OFDM",
+          "bandwidths_mhz": [
+            20
+          ]
+        },
+        {
           "standard": "802.11n",
           "phy_mode": "HT",
           "bandwidths_mhz": [
@@ -49,13 +56,6 @@
             20,
             40,
             80
-          ]
-        },
-        {
-          "standard": "802.11a",
-          "phy_mode": "OFDM",
-          "bandwidths_mhz": [
-            20
           ]
         }
       ],

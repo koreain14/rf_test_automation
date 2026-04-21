@@ -15,6 +15,11 @@ DEFAULT_SCREENSHOT_EXTENSION = ".png"
 DEFAULT_INSTRUMENT_SCREENSHOT_DIR = "C:\\SCREENSHOT"
 DEFAULT_SCREENSHOT_SETTLE_MS = 300
 DEFAULT_POST_STORE_SETTLE_MS = 150
+DEFAULT_PRESET_DIR_NAME = "preset"
+DEFAULT_BAND_DIR_NAME = "band"
+DEFAULT_VOLTAGE_TOKEN = "voltage"
+DEFAULT_CHANNEL_TOKEN = "ch"
+DEFAULT_BW_TOKEN = "bw"
 
 
 def capture_analyzer_screenshot_best_effort(
@@ -218,7 +223,7 @@ def _resolve_output_path(
     workspace_root = Path.cwd()
     default_root = (workspace_root / DEFAULT_SCREENSHOT_ROOT).resolve()
     requested_root = _resolve_requested_root(requested_root_dir, workspace_root)
-    relative_run_path = Path(run_id) / "screenshots"
+    relative_run_path = _build_relative_run_path(run_id=run_id, case=case)
     file_name = _build_file_name(case=case, result_id=result_id)
 
     metadata: dict[str, Any] = {
@@ -284,6 +289,30 @@ def _resolve_requested_root(requested_root_dir: str, workspace_root: Path) -> Pa
     return path.resolve()
 
 
+def _build_relative_run_path(*, run_id: str, case: Any) -> Path:
+    preset_dir = _resolve_preset_dir_name(case)
+    band_dir = _resolve_band_dir_name(case)
+    safe_run_id = _slug(str(run_id or "")) or "run"
+    return Path(preset_dir) / safe_run_id / band_dir
+
+
+def _resolve_preset_dir_name(case: Any) -> str:
+    tags = _case_tags(case)
+    preset_value = (
+        tags.get("preset")
+        or tags.get("preset_name")
+        or tags.get("preset_id")
+        or DEFAULT_PRESET_DIR_NAME
+    )
+    return _slug(str(preset_value or "")) or DEFAULT_PRESET_DIR_NAME
+
+
+def _resolve_band_dir_name(case: Any) -> str:
+    band_value = getattr(case, "band", "")
+    safe_band = _slug(str(band_value or ""))
+    return safe_band or DEFAULT_BAND_DIR_NAME
+
+
 def _build_path_metadata(
     *,
     final_path: Path,
@@ -319,14 +348,56 @@ def _best_effort_relative_path(path: Path, base: Path) -> str:
 
 def _build_file_name(*, case: Any, result_id: str) -> str:
     parts = [
+        _slug(str(getattr(case, "standard", "") or "")),
         _slug(str(getattr(case, "test_type", "") or "")),
-        _slug(str(getattr(case, "band", "") or "")),
-        f"ch{_slug(str(getattr(case, 'channel', '') or ''))}",
-        f"bw{_slug(str(getattr(case, 'bw_mhz', '') or ''))}",
+        _format_bw_token(getattr(case, "bw_mhz", "")),
+        _format_channel_token(getattr(case, "channel", "")),
+        _format_voltage_token(case),
         _slug(str(result_id or ""))[:8],
     ]
     safe_parts = [part for part in parts if part]
     return "_".join(safe_parts) + DEFAULT_SCREENSHOT_EXTENSION
+
+
+def _format_bw_token(value: Any) -> str:
+    safe_value = _slug(str(value or ""))
+    return f"{DEFAULT_BW_TOKEN}{safe_value}" if safe_value else DEFAULT_BW_TOKEN
+
+
+def _format_channel_token(value: Any) -> str:
+    safe_value = _slug(str(value or ""))
+    return f"{DEFAULT_CHANNEL_TOKEN}{safe_value}" if safe_value else DEFAULT_CHANNEL_TOKEN
+
+
+def _format_voltage_token(case: Any) -> str:
+    tags = _case_tags(case)
+    voltage_condition = _slug(str(tags.get("voltage_condition", "") or ""))
+    target_voltage_v = tags.get("target_voltage_v")
+    target_token = _format_voltage_value_token(target_voltage_v)
+    if voltage_condition and target_token:
+        return f"{voltage_condition}_{target_token}"
+    if target_token:
+        return target_token
+    if voltage_condition:
+        return voltage_condition
+    return DEFAULT_VOLTAGE_TOKEN
+
+
+def _format_voltage_value_token(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        normalized = f"{float(value):g}v"
+    except Exception:
+        normalized = f"{value}v"
+    return _slug(normalized)
+
+
+def _case_tags(case: Any) -> dict[str, Any]:
+    try:
+        return dict(getattr(case, "tags", {}) or {})
+    except Exception:
+        return {}
 
 
 def _slug(text: str) -> str:

@@ -24,12 +24,13 @@ class ResultExportHelper:
             ("channel", "CH"),
             ("voltage_condition", "Voltage Cond"),
             ("target_voltage_v_display", "Voltage (V)"),
-            ("measured_value", "Measured"),
+            ("measured_value", "Measured (Corrected)"),
             ("raw_measured_value", "Raw Measured"),
             ("applied_correction_db", "Applied Correction(dB)"),
             ("correction_profile_name", "Correction Profile"),
             ("correction_mode", "Correction Mode"),
             ("correction_bound_path", "Correction Path"),
+            ("correction_breakdown_text", "Correction Breakdown"),
             ("limit_value", "Limit"),
             ("difference_display", "Difference"),
             ("measurement_unit", "Unit"),
@@ -51,6 +52,10 @@ class ResultExportHelper:
         )
         export_row["target_voltage_v_display"] = self.format_voltage(export_row.get("target_voltage_v"))
         export_row["screenshot"] = "Yes" if export_row.get("has_screenshot") else ""
+        export_row["correction_breakdown_text"] = self.format_correction_breakdown_text(
+            export_row.get("correction_breakdown") or {},
+            export_row.get("applied_correction_db"),
+        )
         return export_row
 
     def write_results_csv(self, path: str, rows: Sequence[Dict[str, Any]]) -> None:
@@ -78,7 +83,7 @@ class ResultExportHelper:
             for column_index, (key, _) in enumerate(cols, start=1):
                 ws.cell(row=row_index, column=column_index, value=export_row.get(key, ""))
 
-        widths = [12, 12, 10, 14, 12, 10, 8, 16, 14, 14, 18, 18, 16, 16, 12, 18, 14, 12, 40, 26, 26]
+        widths = [12, 12, 10, 14, 12, 10, 8, 16, 14, 18, 18, 18, 16, 16, 16, 40, 18, 14, 12, 12, 40, 26, 26]
         self._apply_widths(ws, widths)
         wb.save(path)
 
@@ -92,12 +97,21 @@ class ResultExportHelper:
             ("channel", "CH"),
             ("voltage_condition", "Voltage Cond"),
             ("target_voltage_v_display", "Voltage (V)"),
-            ("measured_a", "Run A"),
-            ("measured_b", "Run B"),
+            ("measured_a", "Run A (Corrected)"),
+            ("measured_b", "Run B (Corrected)"),
+            ("raw_measured_a", "Run A Raw"),
+            ("raw_measured_b", "Run B Raw"),
+            ("applied_correction_db_a", "Correction A(dB)"),
+            ("applied_correction_db_b", "Correction B(dB)"),
+            ("delta_applied_correction_db", "Correction Delta(B-A)"),
             ("correction_profile_name_a", "Correction Profile A"),
             ("correction_profile_name_b", "Correction Profile B"),
+            ("correction_mode_a", "Correction Mode A"),
+            ("correction_mode_b", "Correction Mode B"),
             ("correction_bound_path_a", "Correction Path A"),
             ("correction_bound_path_b", "Correction Path B"),
+            ("correction_breakdown_text_a", "Correction Breakdown A"),
+            ("correction_breakdown_text_b", "Correction Breakdown B"),
             ("delta_display", "Delta"),
             ("unit", "Unit"),
             ("status_a", "Status A"),
@@ -116,6 +130,11 @@ class ResultExportHelper:
         export_row = dict(row or {})
         export_row["measured_a"] = format_numeric_value(export_row.get("measured_a"))
         export_row["measured_b"] = format_numeric_value(export_row.get("measured_b"))
+        export_row["raw_measured_a"] = format_numeric_value(export_row.get("raw_measured_a"))
+        export_row["raw_measured_b"] = format_numeric_value(export_row.get("raw_measured_b"))
+        export_row["applied_correction_db_a"] = format_numeric_value(export_row.get("applied_correction_db_a"))
+        export_row["applied_correction_db_b"] = format_numeric_value(export_row.get("applied_correction_db_b"))
+        export_row["delta_applied_correction_db"] = format_difference_value(export_row.get("delta_applied_correction_db"))
         export_row["target_voltage_v_display"] = self.format_voltage(
             export_row.get("target_voltage_v_a")
             if export_row.get("target_voltage_v_a") not in (None, "")
@@ -129,6 +148,14 @@ class ResultExportHelper:
         export_row["difference_b_display"] = format_difference(
             export_row.get("difference_b"),
             export_row.get("difference_unit", ""),
+        )
+        export_row["correction_breakdown_text_a"] = export_row.get("correction_breakdown_text_a") or self.format_correction_breakdown_text(
+            export_row.get("correction_breakdown_a") or {},
+            export_row.get("applied_correction_db_a"),
+        )
+        export_row["correction_breakdown_text_b"] = export_row.get("correction_breakdown_text_b") or self.format_correction_breakdown_text(
+            export_row.get("correction_breakdown_b") or {},
+            export_row.get("applied_correction_db_b"),
         )
         export_row["screenshot_a"] = "Yes" if export_row.get("has_screenshot_a") else ""
         export_row["screenshot_b"] = "Yes" if export_row.get("has_screenshot_b") else ""
@@ -183,7 +210,7 @@ class ResultExportHelper:
                     ws.cell(row=row_index, column=column_index).fill = fill
                     ws.cell(row=row_index, column=column_index).font = light_font
 
-        widths = [12, 10, 14, 12, 10, 8, 16, 12, 14, 14, 18, 18, 16, 16, 16, 12, 12, 12, 16, 16, 12, 12, 14, 14, 12, 12]
+        widths = [12, 10, 14, 12, 10, 8, 16, 12, 18, 18, 18, 18, 16, 16, 18, 18, 18, 16, 16, 16, 16, 36, 36, 16, 12, 12, 12, 16, 16, 12, 12, 14, 14, 12, 12]
         self._apply_widths(ws, widths)
         wb.save(path)
 
@@ -194,6 +221,30 @@ class ResultExportHelper:
             return f"{float(value):g}"
         except Exception:
             return str(value or "")
+
+    def format_correction_breakdown_text(self, breakdown: Dict[str, Any], applied_total: Any) -> str:
+        payload = dict(breakdown or {})
+        if not payload:
+            if applied_total in (None, "", 0, 0.0):
+                return ""
+            return f"total_db={format_numeric_value(applied_total)}"
+
+        ordered_keys = [
+            "cable_loss_db",
+            "attenuator_db",
+            "dut_cable_loss_db",
+            "switchbox_loss_db",
+            "divider_loss_db",
+            "external_gain_db",
+            "manual_offset_db",
+        ]
+        parts = []
+        for key in ordered_keys:
+            if key not in payload:
+                continue
+            parts.append(f"{key}={format_numeric_value(payload.get(key))}")
+        parts.append(f"total_db={format_numeric_value(applied_total)}")
+        return "; ".join(parts)
 
     def _apply_widths(self, worksheet, widths: Iterable[int]) -> None:
         for column_index, width in enumerate(widths, start=1):

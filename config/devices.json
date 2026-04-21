@@ -21,6 +21,49 @@
       "serial_number": "MY60112430",
       "options": {},
       "ports": []
+    },
+    {
+      "name": "HCT HRSM-SP4T 2-60-402 0.0.1",
+      "type": "switchbox",
+      "driver": "generic_switch",
+      "resource": "GPIB0::15::INSTR",
+      "enabled": true,
+      "description": "",
+      "serial_number": "",
+      "options": {},
+      "ports": [
+        {
+          "name": "ANT1",
+          "command": "PORT 1",
+          "description": ""
+        },
+        {
+          "name": "ANT2",
+          "command": "PORT 2",
+          "description": ""
+        },
+        {
+          "name": "ANT3",
+          "command": "PORT 3",
+          "description": ""
+        },
+        {
+          "name": "ANT4",
+          "command": "PORT 4",
+          "description": ""
+        }
+      ]
+    },
+    {
+      "name": "E3632A",
+      "type": "switchbox",
+      "driver": "generic_switch",
+      "resource": "GPIB0::15::INSTR",
+      "enabled": true,
+      "description": "HCT HRSM-SP4T 2-60-402 0.0.1",
+      "serial_number": "",
+      "options": {},
+      "ports": []
     }
   ]
 }

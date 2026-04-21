@@ -5,7 +5,7 @@
       "analyzer": "N9020B",
       "turntable": null,
       "mast": null,
-      "switchbox": null,
+      "switchbox": "HCT HRSM-SP4T 2-60-402 0.0.1",
       "power_supply": "E3632A_01"
     }
   ]

@@ -20,6 +20,7 @@ class ResultsTableModel(QAbstractTableModel):
         "Voltage Cond",
         "Voltage (V)",
         "Measured",
+        "Correction",
         "Limit",
         "Difference",
         "Unit",
@@ -78,13 +79,15 @@ class ResultsTableModel(QAbstractTableModel):
                 value = row.get("measured_value")
                 return format_numeric_value(value)
             if col == 10:
+                return self._format_correction(row.get("applied_correction_db"))
+            if col == 11:
                 value = row.get("limit_value")
                 return format_numeric_value(value)
-            if col == 11:
-                return format_difference_value(row.get("difference_value"))
             if col == 12:
-                return row.get("measurement_unit", "") or row.get("difference_unit", "")
+                return format_difference_value(row.get("difference_value"))
             if col == 13:
+                return row.get("measurement_unit", "") or row.get("difference_unit", "")
+            if col == 14:
                 return "Yes" if row.get("has_screenshot") else ""
 
         if role == Qt.UserRole:
@@ -109,12 +112,14 @@ class ResultsTableModel(QAbstractTableModel):
             if col == 9:
                 return self._as_sortable_number(row.get("measured_value"))
             if col == 10:
-                return self._as_sortable_number(row.get("limit_value"))
+                return self._as_sortable_number(row.get("applied_correction_db"))
             if col == 11:
-                return self._as_sortable_number(row.get("difference_value"))
+                return self._as_sortable_number(row.get("limit_value"))
             if col == 12:
-                return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+                return self._as_sortable_number(row.get("difference_value"))
             if col == 13:
+                return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+            if col == 14:
                 return 1 if row.get("has_screenshot") else 0
 
         if role == Qt.BackgroundRole:
@@ -132,7 +137,7 @@ class ResultsTableModel(QAbstractTableModel):
             if status in ("FAIL", "ERROR", "SKIP"):
                 return QBrush(QColor("#F8FAFC"))
 
-            if col == 11:
+            if col == 12:
                 value = row.get("difference_value")
                 try:
                     numeric = float(value)
@@ -150,18 +155,20 @@ class ResultsTableModel(QAbstractTableModel):
             if col == 0:
                 font.setBold(True)
                 return font
-            if status in ("FAIL", "ERROR") and col in (0, 11, 13):
+            if status in ("FAIL", "ERROR") and col in (0, 12, 14):
                 font.setBold(True)
                 return font
 
         if role == Qt.TextAlignmentRole:
-            if col in (5, 6, 7, 8, 9, 10, 11, 12, 13):
+            if col in (5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
                 return Qt.AlignCenter
 
         if role == Qt.ToolTipRole:
-            if col == 11:
+            if col == 10:
+                return self._format_correction(row.get("applied_correction_db"))
+            if col == 12:
                 return format_difference(row.get("difference_value"), row.get("difference_unit", ""))
-            if col == 13:
+            if col == 14:
                 return row.get("screenshot_path", "") or row.get("screenshot_abs_path", "")
             details = [
                 f"Key: {row.get('test_key', '')}",
@@ -204,12 +211,14 @@ class ResultsTableModel(QAbstractTableModel):
         if column == 9:
             return self._as_sortable_number(row.get("measured_value"))
         if column == 10:
-            return self._as_sortable_number(row.get("limit_value"))
+            return self._as_sortable_number(row.get("applied_correction_db"))
         if column == 11:
-            return self._as_sortable_number(row.get("difference_value"))
+            return self._as_sortable_number(row.get("limit_value"))
         if column == 12:
-            return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+            return self._as_sortable_number(row.get("difference_value"))
         if column == 13:
+            return str(row.get("measurement_unit", "") or row.get("difference_unit", ""))
+        if column == 14:
             return 1 if row.get("has_screenshot") else 0
         return ""
 
@@ -228,3 +237,14 @@ class ResultsTableModel(QAbstractTableModel):
             return f"{float(value):g}"
         except Exception:
             return str(value or "")
+
+    def _format_correction(self, value: Any) -> str:
+        try:
+            if value in (None, ""):
+                return ""
+            numeric = float(value)
+        except Exception:
+            return ""
+        if numeric > 0:
+            return f"+{numeric:.2f} dB"
+        return f"{numeric:.2f} dB"

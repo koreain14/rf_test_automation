@@ -425,6 +425,9 @@ class CompareTab(QWidget, ResultTaskTabBase):
 
         def _task():
             rows = self.svc.get_comparable_results(project_id, run_a, run_b)
+            rows_a = self.svc.get_results_page(project_id=project_id, run_id=run_a, status_filter="ALL", offset=0, limit=5000)
+            rows_b = self.svc.get_results_page(project_id=project_id, run_id=run_b, status_filter="ALL", offset=0, limit=5000)
+            rows = self._enrich_compare_rows(rows, rows_a, rows_b)
             if changed_only:
                 rows = [r for r in rows if r.get("changed")]
             return {
@@ -485,8 +488,13 @@ class CompareTab(QWidget, ResultTaskTabBase):
         lines = [
             f"Test: {row.get('test_type', '')}",
             f"Band/Standard/Data Rate/BW/CH: {row.get('band', '')} / {row.get('standard', '')} / {row.get('data_rate', '')} / {row.get('bw_mhz', '')} / {row.get('channel', '')}",
-            f"Run A Measured: {format_numeric_value(row.get('measured_a'))}",
-            f"Run B Measured: {format_numeric_value(row.get('measured_b'))}",
+            f"Corrected A: {format_numeric_value(row.get('corrected_measured_a', row.get('measured_a')))}",
+            f"Corrected B: {format_numeric_value(row.get('corrected_measured_b', row.get('measured_b')))}",
+            f"Raw A: {format_numeric_value(row.get('raw_measured_a'))}",
+            f"Raw B: {format_numeric_value(row.get('raw_measured_b'))}",
+            f"Applied Correction A (dB): {format_numeric_value(row.get('applied_correction_db_a'))}",
+            f"Applied Correction B (dB): {format_numeric_value(row.get('applied_correction_db_b'))}",
+            f"Correction Delta (B-A): {format_difference_value(row.get('delta_applied_correction_db'))}",
             f"Delta: {format_difference_value(row.get('delta_value'))}",
             f"Unit: {row.get('unit', '')}",
             f"Status A/B: {row.get('status_a', '')} / {row.get('status_b', '')}",
@@ -498,7 +506,12 @@ class CompareTab(QWidget, ResultTaskTabBase):
             f"Limit A/B: {row.get('limit_a', '')} / {row.get('limit_b', '')}",
             f"Comparator A/B: {row.get('comparator_a', '')} / {row.get('comparator_b', '')}",
             f"Correction Profile A/B: {row.get('correction_profile_name_a', '')} / {row.get('correction_profile_name_b', '')}",
+            f"Correction Mode A/B: {row.get('correction_mode_a', '')} / {row.get('correction_mode_b', '')}",
             f"Correction Path A/B: {row.get('correction_bound_path_a', '')} / {row.get('correction_bound_path_b', '')}",
+            "Breakdown A:",
+            self._format_correction_breakdown(row.get("correction_breakdown_a") or {}, row.get("applied_correction_db_a")),
+            "Breakdown B:",
+            self._format_correction_breakdown(row.get("correction_breakdown_b") or {}, row.get("applied_correction_db_b")),
             f"Screenshot A: {row.get('screenshot_path_a', '') or row.get('screenshot_abs_path_a', '') or '(none)'}",
             f"Screenshot B: {row.get('screenshot_path_b', '') or row.get('screenshot_abs_path_b', '') or '(none)'}",
         ]
@@ -560,6 +573,103 @@ class CompareTab(QWidget, ResultTaskTabBase):
             error_title="Export Compare Excel Failed",
             log_prefix="compare task",
         )
+
+    def _enrich_compare_rows(self, compare_rows: List[Dict], rows_a: List[Dict], rows_b: List[Dict]) -> List[Dict]:
+        map_a = {self._result_identity_key(row): dict(row or {}) for row in rows_a}
+        map_b = {self._result_identity_key(row): dict(row or {}) for row in rows_b}
+        out = []
+        for row in compare_rows:
+            compare_row = dict(row or {})
+            key = self._compare_identity_key(compare_row)
+            a = map_a.get(key, {})
+            b = map_b.get(key, {})
+            compare_row["corrected_measured_a"] = a.get("measured_value", compare_row.get("measured_a", ""))
+            compare_row["corrected_measured_b"] = b.get("measured_value", compare_row.get("measured_b", ""))
+            compare_row["raw_measured_a"] = a.get("raw_measured_value", "")
+            compare_row["raw_measured_b"] = b.get("raw_measured_value", "")
+            compare_row["applied_correction_db_a"] = a.get("applied_correction_db", "")
+            compare_row["applied_correction_db_b"] = b.get("applied_correction_db", "")
+            compare_row["correction_mode_a"] = str(a.get("correction_mode", "") or "")
+            compare_row["correction_mode_b"] = str(b.get("correction_mode", "") or "")
+            compare_row["correction_applied_a"] = bool(a.get("correction_applied"))
+            compare_row["correction_applied_b"] = bool(b.get("correction_applied"))
+            compare_row["correction_breakdown_a"] = dict(a.get("correction_breakdown") or {})
+            compare_row["correction_breakdown_b"] = dict(b.get("correction_breakdown") or {})
+            compare_row["correction_breakdown_text_a"] = self._format_correction_breakdown(
+                compare_row.get("correction_breakdown_a") or {},
+                compare_row.get("applied_correction_db_a"),
+            )
+            compare_row["correction_breakdown_text_b"] = self._format_correction_breakdown(
+                compare_row.get("correction_breakdown_b") or {},
+                compare_row.get("applied_correction_db_b"),
+            )
+            compare_row["delta_applied_correction_db"] = self._safe_delta(
+                compare_row.get("applied_correction_db_b"),
+                compare_row.get("applied_correction_db_a"),
+            )
+            out.append(compare_row)
+        return out
+
+    def _result_identity_key(self, row: Dict) -> tuple:
+        return (
+            str(row.get("test_key", "") or ""),
+            str(row.get("test_type", "") or ""),
+            str(row.get("band", "") or ""),
+            str(row.get("standard", "") or ""),
+            str(row.get("channel", "") or ""),
+            str(row.get("bw_mhz", "") or ""),
+            str(row.get("data_rate", "") or ""),
+            str(row.get("voltage_condition", "") or ""),
+            str(row.get("target_voltage_v", "") or ""),
+        )
+
+    def _compare_identity_key(self, row: Dict) -> tuple:
+        target_voltage = row.get("target_voltage_v_a")
+        if target_voltage in (None, ""):
+            target_voltage = row.get("target_voltage_v_b")
+        return (
+            str(row.get("test_key", "") or ""),
+            str(row.get("test_type", "") or ""),
+            str(row.get("band", "") or ""),
+            str(row.get("standard", "") or ""),
+            str(row.get("channel", "") or ""),
+            str(row.get("bw_mhz", "") or ""),
+            str(row.get("data_rate", "") or ""),
+            str(row.get("voltage_condition", "") or ""),
+            str(target_voltage or ""),
+        )
+
+    def _format_correction_breakdown(self, breakdown: Dict, applied_total) -> str:
+        payload = dict(breakdown or {})
+        if not payload:
+            if applied_total in (None, "", 0, 0.0):
+                return "(none)"
+            return f"  total_db={format_numeric_value(applied_total)}"
+
+        ordered_keys = [
+            "cable_loss_db",
+            "attenuator_db",
+            "dut_cable_loss_db",
+            "switchbox_loss_db",
+            "divider_loss_db",
+            "external_gain_db",
+            "manual_offset_db",
+        ]
+        lines = []
+        for key in ordered_keys:
+            if key not in payload:
+                continue
+            lines.append(f"  {key}={format_numeric_value(payload.get(key))}")
+        lines.append(f"  total_db={format_numeric_value(applied_total)}")
+        return "\n".join(lines)
+
+    def _safe_delta(self, right, left):
+        try:
+            if right in (None, "") or left in (None, ""):
+                return ""
+            return round(float(right) - float(left), 3)
+        except Exception:
+            return ""
 
     def _as_sortable_number(self, value) -> float:
         try:

@@ -506,15 +506,27 @@ class ResultsTab(QWidget, ResultTaskTabBase):
         self.result_detail.setPlainText(self._build_result_detail_text(row))
 
     def _build_result_detail_text(self, row: Dict) -> str:
+        last_step_data = dict(row.get("last_step_data") or {})
+        breakdown_text = self._format_correction_breakdown(
+            row.get("correction_breakdown") or {},
+            row.get("applied_correction_db"),
+        )
+        corrected_value = row.get("measured_value")
+        raw_value = row.get("raw_measured_value")
+        correction_applied = bool(row.get("correction_applied"))
+        binding_source = str(last_step_data.get("binding_source") or "")
         lines = [
             f"Status: {row.get('status', '')}",
-            f"Measured: {format_numeric_value(row.get('measured_value'))}",
-            f"Raw Measured: {format_numeric_value(row.get('raw_measured_value'))}",
+            f"Corrected Value: {format_numeric_value(corrected_value)}",
+            f"Raw Measured Value: {format_numeric_value(raw_value)}",
             f"Applied Correction (dB): {format_numeric_value(row.get('applied_correction_db'))}",
+            f"Correction Applied: {'Yes' if correction_applied else 'No'}",
             f"Correction Profile: {row.get('correction_profile_name', '')}",
             f"Correction Mode: {row.get('correction_mode', '')}",
-            f"Correction Path: {row.get('correction_bound_path', '')}",
-            f"Correction Breakdown: {row.get('correction_breakdown', {})}",
+            f"Bound Path: {row.get('correction_bound_path', '')}",
+            f"Binding Source: {binding_source}",
+            "Breakdown:",
+            breakdown_text,
             f"Limit: {format_numeric_value(row.get('limit_value'))}",
             f"Difference: {format_difference(row.get('difference_value'), row.get('difference_unit', ''))}",
             f"Unit: {row.get('measurement_unit', '') or row.get('difference_unit', '')}",
@@ -530,6 +542,30 @@ class ResultsTab(QWidget, ResultTaskTabBase):
             f"Case Key: {row.get('test_key', '')}",
             f"Reason: {row.get('reason', '')}",
         ]
+        return "\n".join(lines)
+
+    def _format_correction_breakdown(self, breakdown: Dict, applied_total) -> str:
+        payload = dict(breakdown or {})
+        if not payload:
+            if applied_total in (None, '', 0, 0.0):
+                return "(none)"
+            return f"  total_db={format_numeric_value(applied_total)}"
+
+        ordered_keys = [
+            "cable_loss_db",
+            "attenuator_db",
+            "dut_cable_loss_db",
+            "switchbox_loss_db",
+            "divider_loss_db",
+            "external_gain_db",
+            "manual_offset_db",
+        ]
+        lines = []
+        for key in ordered_keys:
+            if key not in payload:
+                continue
+            lines.append(f"  {key}={format_numeric_value(payload.get(key))}")
+        lines.append(f"  total_db={format_numeric_value(applied_total)}")
         return "\n".join(lines)
 
     def rerun_from_selection(self):
