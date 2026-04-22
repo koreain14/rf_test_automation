@@ -5,20 +5,26 @@
   "measurements": {
     "PSD": {
       "att_db": 20.0,
-      "ref_level_dbm": 20.0,
-      "vbw_hz": 1000000.0,
       "avg_count": 10,
+      "rbw_hz": 1000000.0,
       "sweep_time_s": 1.0,
-      "rbw_hz": 1000000.0
+      "vbw_hz": 1000000.0,
+      "ref_level_dbm": 20.0
     },
     "OBW": {
       "att_db": 10.0,
-      "ref_level_dbm": 10.0,
       "avg_count": 50,
-      "trace_mode": "AVERAGE"
+      "trace_mode": "AVERAGE",
+      "ref_level_dbm": 10.0
     },
     "SP": {
       "span_hz": 1500000000.0
+    },
+    "TXP": {
+      "avg_count": 100,
+      "detector": "AVERAGE",
+      "sweep_time_s": 0.1,
+      "trace_mode": "AVERAGE"
     }
   },
   "base": "default",

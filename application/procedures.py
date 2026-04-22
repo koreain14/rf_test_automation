@@ -20,6 +20,7 @@ from application.measurements.keysight_obw_helper import (
     mock_obw_measurement,
 )
 from application.measurements.keysight_psd_helper import measure_psd_keysight
+from application.measurements.keysight_txp_helper import measure_txp_keysight, mock_txp_measurement
 from application.psd_unit_policy import (
     PSD_CANONICAL_UNIT,
     PSD_METHOD_AVERAGE,
@@ -645,6 +646,171 @@ class ObwProcedure(SpectrumProcedure):
         return []
 
 
+class TxpMeasureStep:
+    name = "TXP_MEASURE"
+
+    def run(self, ctx: CaseContext, inst) -> StepResult:
+        detection = detect_keysight_xseries_analyzer(inst)
+        use_real = bool(detection.get("usable"))
+        backend = "real" if use_real else "mock"
+        reason = str(detection.get("reason") or "unknown")
+        idn = str(detection.get("idn") or "")
+        source_class = str(detection.get("source_class") or type(inst).__name__)
+        log.info(
+            "txp backend selected | case=%s backend=%s reason=%s source_class=%s idn=%s",
+            getattr(ctx.case, "key", ""),
+            backend,
+            reason,
+            source_class,
+            idn,
+        )
+
+        resolved_profile = build_consumable_measurement_profile(
+            test_type=getattr(ctx.case, "test_type", ""),
+            resolved_profile=dict(ctx.values.get("resolved_profile") or {}),
+            instrument_snapshot=dict(getattr(ctx.case, "instrument", {}) or {}),
+        )
+        ctx.values["resolved_profile"] = dict(resolved_profile)
+
+        try:
+            result = (
+                measure_txp_keysight(
+                    inst,
+                    ctx.case,
+                    profile_settings=resolved_profile,
+                    screenshot_context={
+                        "run_id": ctx.values.get("run_id", ""),
+                        "result_id": ctx.values.get("result_id", ""),
+                        "screenshot_root_dir": ctx.values.get("screenshot_root_dir", ""),
+                        "screenshot_settle_ms": ctx.values.get("screenshot_settle_ms", 300),
+                    },
+                )
+                if use_real
+                else mock_txp_measurement(ctx.case)
+            )
+        except Exception as exc:
+            ctx.values["verdict"] = "ERROR"
+            ctx.values["measurement_source"] = backend
+            ctx.values["backend_reason"] = reason
+            ctx.values["error_message"] = str(exc)
+            return StepResult(
+                step_name=self.name,
+                status="ERROR",
+                message=str(exc),
+                data={
+                    "measurement_source": backend,
+                    "backend_reason": reason,
+                    "backend_idn": idn,
+                    "source_class": source_class,
+                    "measurement_profile_precedence": resolved_profile.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot"),
+                },
+            )
+
+        ctx.values["measured_value"] = result["measured_value"]
+        if result.get("raw_measured_value") is not None:
+            ctx.values["raw_measured_value"] = result.get("raw_measured_value")
+        ctx.values["limit_value"] = result["limit_value"]
+        ctx.values["margin_db"] = result["margin_db"]
+        ctx.values["measurement_unit"] = result.get("measurement_unit", "dBm")
+        ctx.values["measurement_source"] = result.get("measurement_source", backend)
+        ctx.values["backend_reason"] = result.get("backend_reason", reason)
+        if result.get("backend_idn"):
+            ctx.values["backend_idn"] = result.get("backend_idn")
+        if result.get("error_message"):
+            ctx.values["error_message"] = result.get("error_message")
+        if result.get("difference_value") is not None:
+            ctx.values["difference_value"] = result.get("difference_value")
+        if result.get("difference_unit"):
+            ctx.values["difference_unit"] = result.get("difference_unit")
+        if result.get("comparator"):
+            ctx.values["comparator"] = result.get("comparator")
+        if result.get("measurement_profile_span_source"):
+            ctx.values["measurement_profile_span_source"] = result.get("measurement_profile_span_source")
+        if result.get("measurement_profile_precedence"):
+            ctx.values["measurement_profile_precedence"] = result.get("measurement_profile_precedence")
+        if result.get("scpi_trace_mode"):
+            ctx.values["scpi_trace_mode"] = result.get("scpi_trace_mode")
+        if result.get("scpi_detector"):
+            ctx.values["scpi_detector"] = result.get("scpi_detector")
+        if result.get("scpi_average_enabled") is not None:
+            ctx.values["scpi_average_enabled"] = result.get("scpi_average_enabled")
+        if result.get("scpi_avg_count") is not None:
+            ctx.values["scpi_avg_count"] = result.get("scpi_avg_count")
+        if result.get("scpi_power_unit"):
+            ctx.values["scpi_power_unit"] = result.get("scpi_power_unit")
+        _apply_screenshot_to_context(ctx, result)
+        ctx.values["verdict"] = result.get("verdict", "ERROR")
+
+        return StepResult(
+            step_name=self.name,
+            status="OK",
+            artifact_uri=result.get("screenshot_abs_path") or None,
+            data={
+                "measured_value": result["measured_value"],
+                "raw_measured_value": result.get("raw_measured_value"),
+                "limit_value": result["limit_value"],
+                "margin_db": result["margin_db"],
+                "measurement_unit": result.get("measurement_unit", "dBm"),
+                "measurement_source": result.get("measurement_source", backend),
+                "backend_reason": result.get("backend_reason", reason),
+                "backend_idn": result.get("backend_idn", idn),
+                "measurement_profile_name": resolved_profile.get("profile_name", ""),
+                "measurement_profile_source": resolved_profile.get("profile_source", ""),
+                "measurement_profile_precedence": result.get("measurement_profile_precedence", resolved_profile.get("measurement_profile_precedence", "measurement_profile_wins_over_instrument_snapshot")),
+                "measurement_profile_span_source": result.get("measurement_profile_span_source", ""),
+                "difference_value": result.get("difference_value"),
+                "difference_unit": result.get("difference_unit", result.get("measurement_unit", "")),
+                "comparator": result.get("comparator", "upper_limit"),
+                "scpi_power_unit": result.get("scpi_power_unit", ""),
+                "scpi_measurement_method": result.get("scpi_measurement_method", "CHP"),
+                "ruleset_id": result.get("ruleset_id", ""),
+                "device_class": result.get("device_class", ""),
+                "scpi_trace_mode": result.get("scpi_trace_mode", ""),
+                "scpi_detector": result.get("scpi_detector", ""),
+                "scpi_average_enabled": result.get("scpi_average_enabled"),
+                "scpi_avg_count": result.get("scpi_avg_count"),
+                "screenshot_capture_status": result.get("screenshot_capture_status", ""),
+                "screenshot_capture_error": result.get("screenshot_capture_error", ""),
+                "screenshot_path": result.get("screenshot_path", ""),
+                "screenshot_abs_path": result.get("screenshot_abs_path", ""),
+                "screenshot_root_dir": result.get("screenshot_root_dir", ""),
+                "screenshot_storage_mode": result.get("screenshot_storage_mode", ""),
+                "screenshot_fallback_used": result.get("screenshot_fallback_used", False),
+            },
+        )
+
+
+class TxpProcedure(SpectrumProcedure):
+    name = "TXP"
+
+    def precheck(self, ctx: CaseContext, inst: InstrumentSession) -> Optional[StepResult]:
+        detection = detect_keysight_xseries_analyzer(inst)
+        backend = "real" if detection.get("usable") else "mock"
+        return StepResult(
+            step_name="PREFLIGHT",
+            status="OK",
+            data={
+                "procedure": self.name,
+                "test_type": ctx.case.test_type,
+                "measurement_source": backend,
+                "backend_reason": detection.get("reason", "unknown"),
+                "backend_idn": detection.get("idn", ""),
+            },
+        )
+
+    def setup_steps(self, ctx: CaseContext, inst: InstrumentSession) -> List[Step]:
+        detection = detect_keysight_xseries_analyzer(inst)
+        if detection.get("usable"):
+            return [ConfigureInstrumentStep()]
+        return []
+
+    def acquire_steps(self, ctx: CaseContext, inst: InstrumentSession) -> List[Step]:
+        return [TxpMeasureStep()]
+
+    def compute_steps(self, ctx: CaseContext, inst: InstrumentSession) -> List[Step]:
+        return []
+
+
 class SpuriousProcedure(SpectrumProcedure):
     name = "SP"
 
@@ -664,6 +830,7 @@ class ProcedureRegistry:
         self._map: Dict[str, BaseProcedure] = {
             "PSD": PsdProcedure(),
             "OBW": ObwProcedure(),
+            "TXP": TxpProcedure(),
             "SP": SpuriousProcedure(),
             "RX": RxProcedure(),
         }

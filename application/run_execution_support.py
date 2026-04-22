@@ -14,6 +14,7 @@ from application.instrument_profile_resolver import InstrumentProfileResolver
 from application.procedures import ProcedureRegistry
 from application.runner_step import StepRunner
 from application.step_sink_sqlite import StepResultSinkSQLite
+from application.test_type_symbols import normalize_test_type_symbol
 from domain.execution import RunContext
 from domain.expand import expand_recipe
 from domain.overrides import apply_overrides
@@ -691,6 +692,7 @@ class CaseExecutionPipeline:
             "band": getattr(previous_case, "band", None) if previous_case is not None else None,
             "center_freq_mhz": getattr(previous_case, "center_freq_mhz", None) if previous_case is not None else None,
             "bw_mhz": getattr(previous_case, "bw_mhz", None) if previous_case is not None else None,
+            "standard": getattr(previous_case, "standard", None) if previous_case is not None else None,
             "phy_mode": previous_tags.get("phy_mode"),
             "data_rate": previous_tags.get("data_rate"),
             "voltage_condition": previous_tags.get("voltage_condition"),
@@ -701,6 +703,7 @@ class CaseExecutionPipeline:
             "band": getattr(current_case, "band", None),
             "center_freq_mhz": getattr(current_case, "center_freq_mhz", None),
             "bw_mhz": getattr(current_case, "bw_mhz", None),
+            "standard": getattr(current_case, "standard", None),
             "phy_mode": current_tags.get("phy_mode"),
             "data_rate": current_tags.get("data_rate"),
             "voltage_condition": current_tags.get("voltage_condition"),
@@ -724,6 +727,64 @@ class CaseExecutionPipeline:
             "case_key": getattr(current_case, "key", ""),
             "test_type": getattr(current_case, "test_type", ""),
             "standard": getattr(current_case, "standard", ""),
+        }
+
+    def should_confirm_data_rate_change(self, *, dut_control_mode: str, previous_case, current_case) -> bool:
+        if str(dut_control_mode or "manual").strip().lower() != "manual":
+            return False
+        if previous_case is None or current_case is None:
+            return False
+
+        current_tags = dict(getattr(current_case, "tags", {}) or {})
+        current_data_rate = str(current_tags.get("data_rate", "") or "").strip()
+        if not current_data_rate:
+            return False
+
+        if not bool(current_tags.get("data_rate_policy_applied")):
+            return False
+
+        previous_standard = str(getattr(previous_case, "standard", "") or "").strip()
+        current_standard = str(getattr(current_case, "standard", "") or "").strip()
+        previous_data_rate = str(dict(getattr(previous_case, "tags", {}) or {}).get("data_rate", "") or "").strip()
+        return (previous_standard != current_standard) or (previous_data_rate != current_data_rate)
+
+    def build_data_rate_prompt_payload(self, previous_case, current_case, dut_control_mode: str) -> dict[str, Any]:
+        previous_tags = dict(getattr(previous_case, "tags", {}) or {}) if previous_case is not None else {}
+        current_tags = dict(getattr(current_case, "tags", {}) or {})
+        current_standard = str(getattr(current_case, "standard", "") or "").strip()
+        current_data_rate = str(current_tags.get("data_rate", "") or "").strip()
+        current_test_type = normalize_test_type_symbol(getattr(current_case, "test_type", ""))
+        return {
+            "prompt_kind": "data_rate_change",
+            "dialog_title": "Change DUT Data Rate",
+            "dut_control_mode": dut_control_mode,
+            "previous_setup_key": self.data_rate_change_key(previous_case) if previous_case is not None else None,
+            "current_setup_key": self.data_rate_change_key(current_case),
+            "previous": {
+                "standard": str(getattr(previous_case, "standard", "") or "").strip() if previous_case is not None else "",
+                "data_rate": str(previous_tags.get("data_rate", "") or "").strip(),
+                "band": getattr(previous_case, "band", None) if previous_case is not None else None,
+                "center_freq_mhz": getattr(previous_case, "center_freq_mhz", None) if previous_case is not None else None,
+                "bw_mhz": getattr(previous_case, "bw_mhz", None) if previous_case is not None else None,
+                "phy_mode": previous_tags.get("phy_mode"),
+            },
+            "current": {
+                "standard": current_standard,
+                "data_rate": current_data_rate,
+                "band": getattr(current_case, "band", None),
+                "center_freq_mhz": getattr(current_case, "center_freq_mhz", None),
+                "bw_mhz": getattr(current_case, "bw_mhz", None),
+                "phy_mode": current_tags.get("phy_mode"),
+            },
+            "instructions": [],
+            "case_key": getattr(current_case, "key", ""),
+            "test_type": current_test_type,
+            "standard": current_standard,
+            "requested_standard": current_standard,
+            "requested_data_rate": current_data_rate,
+            "data_rate_policy_apply_to": list(current_tags.get("data_rate_policy_apply_to") or []),
+            "data_rate_policy_status": str(current_tags.get("data_rate_policy_status", "") or ""),
+            "data_rate_policy_applied": bool(current_tags.get("data_rate_policy_applied")),
         }
 
     def execute_case(
@@ -828,6 +889,55 @@ class CaseExecutionPipeline:
         )
         return True
 
+    def handle_data_rate_change_prompt(
+        self,
+        *,
+        run_id: str,
+        dut_control_mode: str,
+        previous_case,
+        current_case,
+        prompt_reconfigure: Optional[Callable[[dict[str, Any]], bool]],
+    ) -> bool:
+        if not self.should_confirm_data_rate_change(
+            dut_control_mode=dut_control_mode,
+            previous_case=previous_case,
+            current_case=current_case,
+        ):
+            return True
+
+        payload = self.build_data_rate_prompt_payload(previous_case, current_case, dut_control_mode)
+        log.info(
+            "data rate change confirmation required | run=%s case=%s previous=%s current=%s standard=%s data_rate=%s test_type=%s apply_to=%s",
+            run_id,
+            payload.get("case_key"),
+            payload.get("previous_setup_key"),
+            payload.get("current_setup_key"),
+            payload.get("requested_standard"),
+            payload.get("requested_data_rate"),
+            payload.get("test_type"),
+            payload.get("data_rate_policy_apply_to", []),
+        )
+        accepted = True
+        if prompt_reconfigure is not None:
+            accepted = bool(prompt_reconfigure(payload))
+        if not accepted:
+            log.info(
+                "data rate change confirmation aborted by user | run=%s case=%s standard=%s data_rate=%s",
+                run_id,
+                payload.get("case_key"),
+                payload.get("requested_standard"),
+                payload.get("requested_data_rate"),
+            )
+            return False
+        log.info(
+            "data rate change confirmed by user | run=%s case=%s standard=%s data_rate=%s",
+            run_id,
+            payload.get("case_key"),
+            payload.get("requested_standard"),
+            payload.get("requested_data_rate"),
+        )
+        return True
+
     def case_setup_key(self, case) -> tuple:
         tags = dict(getattr(case, "tags", {}) or {})
         phy_mode = str(tags.get("phy_mode") or getattr(case, "standard", "") or "")
@@ -846,4 +956,13 @@ class CaseExecutionPipeline:
             str(getattr(case, "band", "") or ""),
             float(getattr(case, "center_freq_mhz", 0.0) or 0.0),
             float(getattr(case, "bw_mhz", 0.0) or 0.0),
+        )
+
+    def data_rate_change_key(self, case) -> tuple:
+        if case is None:
+            return ("", "")
+        tags = dict(getattr(case, "tags", {}) or {})
+        return (
+            str(getattr(case, "standard", "") or "").strip(),
+            str(tags.get("data_rate", "") or "").strip(),
         )

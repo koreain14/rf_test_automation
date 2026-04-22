@@ -477,7 +477,8 @@ class RulesetAxisEditorDialog(QDialog):
 
         apply_card, apply_layout = self._make_card(
             "Apply To",
-            "Select which test items should use optional axis expansion in Basic Mode.",
+            "Basic Mode convenience for shared optional-axis targeting.\n"
+            "Voltage Policy and Data Rate Policy keep their own independent apply_to selections on their tabs.",
         )
         self.basic_apply_to_checks = self._build_test_type_checkboxes()
         apply_layout.addWidget(self._wrap_checkbox_grid("", self.basic_apply_to_checks))
@@ -637,7 +638,8 @@ class RulesetAxisEditorDialog(QDialog):
         layout.setSpacing(10)
         layout.addWidget(self._make_help_banner(
             "Voltage is an optional axis.\n"
-            "When enabled, the engine expands cases by voltage level only for tests listed in apply_to."
+            "When enabled, the engine expands cases by voltage level only for tests listed in apply_to.\n"
+            "This apply_to is independent from Case Dimensions and Data Rate Policy."
         ))
         self.chk_voltage_enabled = QCheckBox("Voltage policy enabled")
         layout.addWidget(self.chk_voltage_enabled)
@@ -665,7 +667,8 @@ class RulesetAxisEditorDialog(QDialog):
         outer.setSpacing(10)
         outer.addWidget(self._make_help_banner(
             "Data rate is an optional axis.\n"
-            "Rates are resolved by standard, then expanded only for tests included in apply_to."
+            "Rates are resolved by standard, then expanded only for tests included in apply_to.\n"
+            "This apply_to is independent from Case Dimensions and Voltage Policy."
         ))
         layout = QHBoxLayout()
         left = QWidget()
@@ -1007,6 +1010,7 @@ class RulesetAxisEditorDialog(QDialog):
             self._reload_contract_list()
             self._sync_basic_mode_from_ruleset(data)
             self._reload_basic_mode_controls(data)
+            self._refresh_apply_to_checkbox_groups(data)
             self.cb_ui_mode.setCurrentIndex(0 if self._ui_mode == "basic" else 1)
             self._apply_ui_mode_visibility()
             self._refresh_json_preview(self._ruleset_data)
@@ -1380,6 +1384,20 @@ class RulesetAxisEditorDialog(QDialog):
     def _collect_case_dimensions_basic(self, data: Dict[str, Any]) -> Dict[str, Any]:
         dimensions = dict((normalize_case_dimensions(data.get("case_dimensions") or {})).get("dimensions") or {})
         basic_apply_to = self._collect_checked_test_types(self.basic_apply_to_checks)
+        existing_voltage_policy = normalize_voltage_policy(data.get("voltage_policy") or {})
+        existing_data_rate_policy = normalize_data_rate_policy(data.get("data_rate_policy") or {})
+        voltage_apply_to = self._resolve_basic_policy_apply_to(
+            checks=self.voltage_apply_to_checks,
+            existing_apply_to=list(existing_voltage_policy.get("apply_to") or []),
+            shared_apply_to=basic_apply_to,
+            default_apply_to=["PSD", "OBW", "SP"],
+        )
+        data_rate_apply_to = self._resolve_basic_policy_apply_to(
+            checks=self.data_rate_apply_to_checks,
+            existing_apply_to=list(existing_data_rate_policy.get("apply_to") or []),
+            shared_apply_to=basic_apply_to,
+            default_apply_to=["PSD", "RX"],
+        )
         basic_dimensions = {
             "frequency_band": {
                 "name": "frequency_band",
@@ -1434,7 +1452,7 @@ class RulesetAxisEditorDialog(QDialog):
                 "maps_to": "tags.data_rate",
                 "values": [],
                 "optional": True,
-                "apply_to": basic_apply_to or ["PSD", "RX"],
+                "apply_to": data_rate_apply_to,
                 "non_applicable_mode": "EMPTY_VALUE",
                 "policy_ref": "data_rate_policy",
             }
@@ -1446,7 +1464,7 @@ class RulesetAxisEditorDialog(QDialog):
                 "maps_to": "tags.voltage_condition",
                 "values": [],
                 "optional": True,
-                "apply_to": basic_apply_to or ["PSD", "OBW", "SP"],
+                "apply_to": voltage_apply_to,
                 "non_applicable_mode": "EMPTY_VALUE",
                 "policy_ref": "voltage_policy",
             }
@@ -1529,6 +1547,12 @@ class RulesetAxisEditorDialog(QDialog):
             if self.chk_basic_voltage.isChecked() and not selected_basic_levels:
                 selected_basic_levels = [{"name": "NOMINAL", "label": "Nominal", "percent_offset": 0}]
             basic_apply_to = self._collect_checked_test_types(self.basic_apply_to_checks)
+            resolved_apply_to = self._resolve_basic_policy_apply_to(
+                checks=self.voltage_apply_to_checks,
+                existing_apply_to=list(existing_policy.get("apply_to") or []),
+                shared_apply_to=basic_apply_to,
+                default_apply_to=["PSD", "OBW", "SP"],
+            )
             if not self.chk_basic_voltage.isChecked():
                 return normalize_voltage_policy({
                     "enabled": False,
@@ -1543,7 +1567,7 @@ class RulesetAxisEditorDialog(QDialog):
                 "enabled": True,
                 "mode": "PERCENT_OF_NOMINAL",
                 "nominal_source": "preset.nominal_voltage_v",
-                "apply_to": basic_apply_to or collected_apply_to or list(existing_policy.get("apply_to") or []) or ["PSD", "OBW", "SP"],
+                "apply_to": resolved_apply_to,
                 "settle_time_ms": existing_policy.get("settle_time_ms", 500),
                 "fallback_policy": existing_policy.get("fallback_policy", "WARN_AND_CONTINUE"),
                 "levels": selected_basic_levels or collected_levels or list(existing_policy.get("levels") or []) or list(default_levels),
@@ -1559,6 +1583,7 @@ class RulesetAxisEditorDialog(QDialog):
         })
 
     def _collect_data_rate_policy(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        existing_policy = normalize_data_rate_policy(self._ruleset_data.get("data_rate_policy") or {})
         if self._ui_mode == "basic":
             if not self.chk_basic_data_rate.isChecked():
                 return normalize_data_rate_policy({
@@ -1574,9 +1599,15 @@ class RulesetAxisEditorDialog(QDialog):
                     continue
                 for standard in [str(item).strip() for item in (band_payload.get("standards") or []) if str(item).strip()]:
                     standards.setdefault(standard, self._default_rates_for_standard(standard))
+            resolved_apply_to = self._resolve_basic_policy_apply_to(
+                checks=self.data_rate_apply_to_checks,
+                existing_apply_to=list(existing_policy.get("apply_to") or []),
+                shared_apply_to=self._collect_checked_test_types(self.basic_apply_to_checks),
+                default_apply_to=["PSD", "RX"],
+            )
             return normalize_data_rate_policy({
                 "enabled": True,
-                "apply_to": self._collect_checked_test_types(self.basic_apply_to_checks) or ["PSD", "RX"],
+                "apply_to": resolved_apply_to,
                 "non_applicable_mode": "OMIT",
                 "by_standard": standards,
             })
@@ -1750,9 +1781,15 @@ class RulesetAxisEditorDialog(QDialog):
         self.chk_basic_voltage_nominal.setChecked("NOMINAL" in selected_levels)
         self.chk_basic_voltage_high.setChecked("HIGH" in selected_levels)
         self.chk_basic_voltage_low.setChecked("LOW" in selected_levels)
-        apply_to = list(voltage_policy.get("apply_to") or data_rate_policy.get("apply_to") or [])
-        if not apply_to:
-            apply_to = ["PSD", "OBW", "SP"]
+        voltage_axis_apply_to = list((dict(dimensions.get("voltage") or {})).get("apply_to") or voltage_policy.get("apply_to") or [])
+        data_rate_axis_apply_to = list((dict(dimensions.get("data_rate") or {})).get("apply_to") or data_rate_policy.get("apply_to") or [])
+        apply_sets = [values for values in (voltage_axis_apply_to, data_rate_axis_apply_to) if values]
+        if len(apply_sets) == 1:
+            apply_to = list(apply_sets[0])
+        elif len(apply_sets) > 1 and all(values == apply_sets[0] for values in apply_sets[1:]):
+            apply_to = list(apply_sets[0])
+        else:
+            apply_to = []
         self._set_checked_test_types(self.basic_apply_to_checks, apply_to)
 
     def _reload_basic_mode_controls(self, data: Dict[str, Any]) -> None:
@@ -1819,6 +1856,86 @@ class RulesetAxisEditorDialog(QDialog):
         basic = self._ui_mode == "basic"
         self.basic_axis_widget.setVisible(basic)
         self.advanced_axis_widget.setVisible(not basic)
+
+    def _resolve_basic_policy_apply_to(
+        self,
+        *,
+        checks: Dict[str, QCheckBox],
+        existing_apply_to: List[str],
+        shared_apply_to: List[str],
+        default_apply_to: List[str],
+    ) -> List[str]:
+        explicit_apply_to = self._collect_checked_test_types(checks)
+        if explicit_apply_to:
+            return explicit_apply_to
+        if existing_apply_to:
+            return list(existing_apply_to)
+        if shared_apply_to:
+            return list(shared_apply_to)
+        return list(default_apply_to)
+
+    def _available_apply_to_test_types(self, *, axis_name: str = "") -> List[str]:
+        tech = str(self.ed_tech.text().strip() or self._ruleset_data.get("tech", "") or "").strip()
+        return [
+            str(item.get("id", "")).strip()
+            for item in list_available_test_items(
+                tech=tech or None,
+                axis_name=axis_name or None,
+                selectable_only=True,
+            )
+            if str(item.get("id", "")).strip()
+        ]
+
+    def _refresh_apply_to_check_group(
+        self,
+        checks: Dict[str, QCheckBox],
+        *,
+        available_test_types: List[str],
+        unavailable_tooltip: str,
+    ) -> None:
+        allowed = set(available_test_types)
+        selected = set(self._collect_checked_test_types(checks))
+        visible = allowed | selected
+        for name, checkbox in checks.items():
+            if name in visible:
+                checkbox.setVisible(True)
+                checkbox.setEnabled(True)
+                if name in allowed:
+                    checkbox.setToolTip("")
+                else:
+                    checkbox.setToolTip(
+                        "Stored for compatibility, but it is not selectable in the current context.\n"
+                        + unavailable_tooltip
+                    )
+            else:
+                checkbox.setChecked(False)
+                checkbox.setVisible(True)
+                checkbox.setEnabled(False)
+                checkbox.setToolTip(unavailable_tooltip)
+
+    def _refresh_apply_to_checkbox_groups(self, data: Dict[str, Any] | None = None) -> None:
+        _ = data
+        self._refresh_apply_to_check_group(
+            self.basic_apply_to_checks,
+            available_test_types=self._available_apply_to_test_types(),
+            unavailable_tooltip="Basic shared apply_to only shows selectable test items for the current RuleSet tech.",
+        )
+        self._refresh_apply_to_check_group(
+            self.voltage_apply_to_checks,
+            available_test_types=self._available_apply_to_test_types(axis_name="voltage"),
+            unavailable_tooltip="Voltage Policy apply_to only shows selectable test items that support the voltage axis.",
+        )
+        self._refresh_apply_to_check_group(
+            self.data_rate_apply_to_checks,
+            available_test_types=self._available_apply_to_test_types(axis_name="data_rate"),
+            unavailable_tooltip="Data Rate Policy apply_to only shows selectable test items that support the data_rate axis.",
+        )
+        current_dimension_name = self.ed_dimension_name.text().strip() or self._current_dimension_name()
+        self._refresh_apply_to_check_group(
+            self.dimension_apply_to_checks,
+            available_test_types=self._available_apply_to_test_types(axis_name=current_dimension_name),
+            unavailable_tooltip="Case Dimension apply_to only shows selectable test items that support the current axis name.",
+        )
 
     def _default_rates_for_standard(self, standard: str) -> List[str]:
         defaults = {
@@ -1912,9 +2029,18 @@ class RulesetAxisEditorDialog(QDialog):
         self.ed_dimension_source.setText(str(payload.get("source", "") or ""))
         self.ed_dimension_maps_to.setText(str(payload.get("maps_to", "") or ""))
         self.chk_dimension_optional.setChecked(bool(payload.get("optional", False)))
-        self._set_checked_test_types(self.dimension_apply_to_checks, list(payload.get("apply_to") or []))
+        effective_apply_to = list(payload.get("apply_to") or [])
+        if name in {"voltage", "data_rate"}:
+            effective_apply_to, _apply_to_defined, _apply_to_path = effective_policy_backed_axis_apply_to(
+                name,
+                payload,
+                voltage_policy=self._ruleset_data.get("voltage_policy") or {},
+                data_rate_policy=self._ruleset_data.get("data_rate_policy") or {},
+            )
+        self._set_checked_test_types(self.dimension_apply_to_checks, effective_apply_to)
         self.cb_dimension_non_applicable_mode.setCurrentText(str(payload.get("non_applicable_mode", "OMIT") or "OMIT"))
         self._fill_table(self.dimension_values_table, [{"value": value} for value in list(payload.get("values") or [])], ("value",))
+        self._refresh_apply_to_checkbox_groups(self._ruleset_data)
 
     def _load_band_psd_payload(self, name: str, payload: Dict[str, Any]) -> None:
         normalized = normalize_psd_policy(payload)
@@ -2161,6 +2287,7 @@ class RulesetAxisEditorDialog(QDialog):
             self._collect_table_rows(self.voltage_levels_table, ("name", "label", "percent_offset"))
         )
         self._reload_basic_mode_controls(data)
+        self._refresh_apply_to_checkbox_groups(data)
         validation = validate_ruleset_payload(data)
         self._show_validation_results(validation)
         self._apply_field_validation(validation)
@@ -2294,6 +2421,7 @@ class RulesetAxisEditorDialog(QDialog):
     def _clear_field_validation(self) -> None:
         for widget in self._validation_styled_widgets:
             widget.setStyleSheet("")
+            widget.setToolTip("")
         self._validation_styled_widgets = []
 
     def _apply_field_validation(self, validation: Dict[str, List[Dict[str, str]]]) -> None:
@@ -2382,7 +2510,6 @@ class RulesetAxisEditorDialog(QDialog):
             widgets.extend([self.chk_basic_voltage_nominal, self.chk_basic_voltage_high, self.chk_basic_voltage_low])
             if normalized.endswith(".apply_to"):
                 widgets.extend(self.voltage_apply_to_checks.values())
-                widgets.extend(self.basic_apply_to_checks.values())
             return widgets
         if normalized.startswith("data_rate_policy"):
             widgets.append(self.rate_standard_list)
@@ -2390,7 +2517,6 @@ class RulesetAxisEditorDialog(QDialog):
             widgets.append(self.chk_basic_data_rate)
             if normalized.endswith(".apply_to"):
                 widgets.extend(self.data_rate_apply_to_checks.values())
-                widgets.extend(self.basic_apply_to_checks.values())
             return widgets
         if normalized.startswith("test_contracts."):
             widgets.append(self.contract_list)

@@ -1,0 +1,475 @@
+{
+  "id": "NEW_WLAN_RULESET_TEST",
+  "version": "2026.02",
+  "schema_version": 2,
+  "regulation": "KC",
+  "tech": "WLAN",
+  "case_dimensions": {
+    "defined": true,
+    "base": [
+      "test_type",
+      "standard",
+      "frequency_band",
+      "bandwidth",
+      "channel"
+    ],
+    "optional_axes": [
+      {
+        "name": "voltage",
+        "policy_ref": "voltage_policy"
+      },
+      {
+        "name": "data_rate",
+        "policy_ref": "data_rate_policy"
+      }
+    ],
+    "dimensions": {
+      "frequency_band": {
+        "name": "frequency_band",
+        "type": "enum",
+        "source": "bands",
+        "maps_to": "band",
+        "values": [
+          "2.4G",
+          "5G",
+          "6G"
+        ],
+        "optional": false,
+        "apply_to": [],
+        "non_applicable_mode": "OMIT",
+        "policy_ref": "",
+        "apply_to_defined": false
+      },
+      "standard": {
+        "name": "standard",
+        "type": "enum",
+        "source": "preset.standard_or_wlan_expansion",
+        "maps_to": "standard",
+        "values": [],
+        "optional": false,
+        "apply_to": [],
+        "non_applicable_mode": "OMIT",
+        "policy_ref": "",
+        "apply_to_defined": false
+      },
+      "bandwidth": {
+        "name": "bandwidth",
+        "type": "numeric",
+        "source": "preset.bandwidth_mhz",
+        "maps_to": "bw_mhz",
+        "values": [],
+        "optional": false,
+        "apply_to": [],
+        "non_applicable_mode": "OMIT",
+        "policy_ref": "",
+        "apply_to_defined": false
+      },
+      "channel": {
+        "name": "channel",
+        "type": "numeric",
+        "source": "channel_groups",
+        "maps_to": "channel",
+        "values": [],
+        "optional": false,
+        "apply_to": [],
+        "non_applicable_mode": "OMIT",
+        "policy_ref": "",
+        "apply_to_defined": false
+      }
+    }
+  },
+  "bands": {
+    "2.4G": {
+      "psd_result_unit": "MW_PER_MHZ",
+      "psd_policy": {
+        "method": "MARKER_PEAK",
+        "result_unit": "MW_PER_MHZ",
+        "comparator": "upper_limit",
+        "limit": {
+          "value": null,
+          "unit": "MW_PER_MHZ"
+        }
+      },
+      "psd": {
+        "method": "MARKER_PEAK",
+        "limit_value": 10.0,
+        "limit_unit": "MW_PER_MHZ"
+      },
+      "standards": [
+        "802.11b",
+        "802.11g",
+        "802.11n",
+        "802.11ax"
+      ],
+      "tests_supported": [
+        "PSD",
+        "OBW",
+        "TXP"
+      ],
+      "channel_groups": {
+        "ISM": {
+          "channels": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14
+          ],
+          "dfs_required": false,
+          "representatives": {
+            "LOW": 1,
+            "MID": 6,
+            "HIGH": 11
+          }
+        }
+      }
+    },
+    "5G": {
+      "psd_result_unit": "MW_PER_MHZ",
+      "psd_policy": {
+        "method": "MARKER_PEAK",
+        "result_unit": "MW_PER_MHZ",
+        "comparator": "upper_limit",
+        "limit": {
+          "value": 10.0,
+          "unit": "MW_PER_MHZ"
+        }
+      },
+      "psd": {
+        "method": "MARKER_PEAK",
+        "limit_value": 10.0,
+        "limit_unit": "MW_PER_MHZ"
+      },
+      "standards": [
+        "802.11a",
+        "802.11n",
+        "802.11ac",
+        "802.11ax"
+      ],
+      "tests_supported": [
+        "PSD",
+        "OBW",
+        "TXP"
+      ],
+      "channel_groups": {
+        "UNII-1": {
+          "channels": [
+            36,
+            40,
+            44,
+            48
+          ],
+          "dfs_required": false,
+          "representatives": {
+            "LOW": 36,
+            "MID": 44,
+            "HIGH": 48
+          }
+        },
+        "UNII-2A": {
+          "channels": [
+            52,
+            56,
+            60,
+            64
+          ],
+          "dfs_required": true,
+          "representatives": {
+            "LOW": 52,
+            "MID": 60,
+            "HIGH": 64
+          }
+        },
+        "UNII-2C": {
+          "channels": [
+            100,
+            104,
+            108,
+            112,
+            116,
+            120,
+            124,
+            128,
+            132,
+            136,
+            140,
+            144
+          ],
+          "dfs_required": true,
+          "representatives": {
+            "LOW": 100,
+            "MID": 116,
+            "HIGH": 144
+          }
+        },
+        "UNII-3": {
+          "channels": [
+            149,
+            153,
+            157,
+            161,
+            165
+          ],
+          "dfs_required": false,
+          "representatives": {
+            "LOW": 149,
+            "MID": 157,
+            "HIGH": 165
+          }
+        }
+      }
+    },
+    "6G": {
+      "psd_result_unit": "DBM_PER_MHZ",
+      "psd_policy": {
+        "method": "MARKER_PEAK",
+        "result_unit": "DBM_PER_MHZ",
+        "comparator": "upper_limit",
+        "limit": {
+          "value": 1.0,
+          "unit": "DBM_PER_MHZ"
+        }
+      },
+      "psd": {
+        "method": "MARKER_PEAK",
+        "limit_value": 1,
+        "limit_unit": "DBM_PER_MHZ"
+      },
+      "standards": [
+        "802.11ax",
+        "802.11be"
+      ],
+      "tests_supported": [
+        "PSD",
+        "OBW",
+        "TXP"
+      ],
+      "device_classes": [
+        "LPI",
+        "VLP"
+      ],
+      "channel_groups": {
+        "UNII-5": {
+          "channels": [
+            1,
+            5,
+            9,
+            13,
+            17,
+            21,
+            25,
+            29,
+            33,
+            37,
+            41,
+            45,
+            49,
+            53,
+            57,
+            61,
+            65,
+            69,
+            73,
+            77,
+            81,
+            85,
+            89,
+            93
+          ],
+          "dfs_required": false,
+          "representatives": {
+            "LOW": 5,
+            "MID": 37,
+            "HIGH": 93
+          }
+        },
+        "UNII-7": {
+          "channels": [
+            97,
+            101,
+            105,
+            109,
+            113,
+            117,
+            121,
+            125,
+            129,
+            133,
+            137,
+            141,
+            145,
+            149,
+            153,
+            157,
+            161,
+            165,
+            169,
+            173,
+            177,
+            181,
+            185,
+            189,
+            193
+          ],
+          "dfs_required": false,
+          "representatives": {
+            "LOW": 97,
+            "MID": 133,
+            "HIGH": 193
+          }
+        }
+      }
+    }
+  },
+  "instrument_profiles": {
+    "PSD_DEFAULT": {
+      "rbw_hz": 100000,
+      "vbw_hz": 300000,
+      "detector": "RMS",
+      "trace_mode": "AVERAGE"
+    },
+    "OBW_DEFAULT": {
+      "rbw_hz": 10000,
+      "vbw_hz": 30000,
+      "detector": "PEAK",
+      "trace_mode": "MAXHOLD"
+    },
+    "SP_DEFAULT": {
+      "rbw_hz": 100000,
+      "vbw_hz": 300000,
+      "detector": "PEAK",
+      "trace_mode": "MAXHOLD"
+    },
+    "TXP_DEFAULT": {
+      "rbw_hz": 1000000,
+      "vbw_hz": 3000000,
+      "detector": "RMS",
+      "trace_mode": "CLEARWRITE"
+    }
+  },
+  "instrument_profile_refs": {
+    "PSD": "PSD_DEFAULT",
+    "OBW": "OBW_DEFAULT",
+    "SP": "SP_DEFAULT",
+    "RX": "SP_DEFAULT"
+  },
+  "plan_modes": {
+    "Quick": {
+      "channel_policy": "REPRESENTATIVES_ONLY"
+    },
+    "Full": {
+      "channel_policy": "ALL_CHANNELS"
+    }
+  },
+  "voltage_policy": {
+    "enabled": false,
+    "mode": "PERCENT_OF_NOMINAL",
+    "nominal_source": "preset.nominal_voltage_v",
+    "levels": [],
+    "apply_to": [],
+    "apply_to_defined": false,
+    "settle_time_ms": 500,
+    "fallback_policy": "WARN_AND_CONTINUE"
+  },
+  "data_rate_policy": {
+    "enabled": false,
+    "apply_to": [],
+    "apply_to_defined": false,
+    "by_standard": {},
+    "fallback_rate": "",
+    "non_applicable_mode": "OMIT"
+  },
+  "test_labels": {
+    "PSD": "Power Spectral Density (PSD)",
+    "OBW": "Occupied Bandwidth (OBW)",
+    "SP": "Spurious",
+    "RX": "Receiver",
+    "occupied_bandwidth": "Occupied Bandwidth (OBW)",
+    "power_spectral_density": "Power Spectral Density (PSD)",
+    "tx_spurious": "TX Spurious",
+    "rx_spurious": "RX Spurious",
+    "frequency_error": "Frequency Error"
+  },
+  "test_contracts": {
+    "PSD": {
+      "id": "PSD",
+      "name": "Power Spectral Density",
+      "apply_to_test_type": "PSD",
+      "measurement_class": "spectrum",
+      "default_profile_ref": "PSD_DEFAULT",
+      "default_profile": "PSD_DEFAULT",
+      "required_instruments": [
+        "analyzer"
+      ],
+      "result_fields": [
+        "measured_psd"
+      ],
+      "unit": "dBm/MHz",
+      "unit_source": "informational_only",
+      "policy_source": "band.psd_policy",
+      "verdict_type": "limit_upper",
+      "editor_hint": "pool_projection",
+      "canonical_test_id": "PSD",
+      "pool_ref": "PSD",
+      "display_name": "Power Spectral Density",
+      "procedure_key": "PSD"
+    },
+    "OBW": {
+      "id": "OBW",
+      "name": "Occupied Bandwidth",
+      "apply_to_test_type": "OBW",
+      "measurement_class": "spectrum",
+      "default_profile_ref": "OBW_DEFAULT",
+      "default_profile": "OBW_DEFAULT",
+      "required_instruments": [
+        "analyzer"
+      ],
+      "result_fields": [
+        "measured_obw"
+      ],
+      "unit": "MHz",
+      "unit_source": "informational_only",
+      "policy_source": "band.psd_policy",
+      "verdict_type": "limit_upper",
+      "editor_hint": "pool_projection",
+      "canonical_test_id": "OBW",
+      "pool_ref": "OBW",
+      "display_name": "Occupied Bandwidth",
+      "procedure_key": "OBW"
+    },
+    "TXP": {
+      "id": "TXP",
+      "name": "Conducted Power",
+      "measurement_class": "power",
+      "required_instruments": [
+        "analyzer"
+      ],
+      "result_fields": [
+        "measured_value",
+        "limit_value",
+        "margin_db"
+      ],
+      "verdict_type": "limit_upper",
+      "default_profile_ref": "TXP_DEFAULT",
+      "default_profile": "TXP_DEFAULT",
+      "unit": "dBm",
+      "unit_source": "informational_only",
+      "policy_source": "pool:TXP",
+      "editor_hint": "pool_projection",
+      "apply_to_test_type": "TXP",
+      "canonical_test_id": "TXP",
+      "pool_ref": "TXP",
+      "display_name": "Conducted Power",
+      "procedure_key": "TXP"
+    }
+  }
+}

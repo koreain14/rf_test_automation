@@ -170,12 +170,20 @@ def _normalize_case_dimensions_meta(recipe_meta: Dict[str, Any]) -> Dict[str, An
 
 def _ordered_axis_names(case_dimensions: Dict[str, Any]) -> List[str]:
     base = [str(name).strip() for name in (case_dimensions.get("base") or []) if str(name).strip()]
+    optional_axes = [
+        str(item.get("name", "")).strip()
+        for item in (case_dimensions.get("optional_axes") or [])
+        if isinstance(item, dict) and str(item.get("name", "")).strip()
+    ]
     dimensions = dict(case_dimensions.get("dimensions") or {})
     ordered: List[str] = []
     for axis_name in base:
         if axis_name not in ordered:
             ordered.append(axis_name)
     for axis_name in dimensions.keys():
+        if axis_name not in ordered:
+            ordered.append(axis_name)
+    for axis_name in optional_axes:
         if axis_name not in ordered:
             ordered.append(axis_name)
     if "test_type" not in ordered:

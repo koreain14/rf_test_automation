@@ -12,6 +12,10 @@ from domain.test_item_registry import normalize_test_id, normalize_test_id_list,
 PSD_ALLOWED_COMPARATORS = {"upper_limit", "lower_limit"}
 AXIS_ALLOWED_TYPES = {"enum", "numeric", "computed", "string"}
 AXIS_CORE_NAMES = {"frequency_band", "standard", "bandwidth", "channel", "data_rate", "voltage"}
+POLICY_BACKED_AXIS_TO_POLICY = {
+    "voltage": "voltage_policy",
+    "data_rate": "data_rate_policy",
+}
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -321,11 +325,7 @@ def normalize_case_dimensions(raw: Dict[str, Any] | None) -> Dict[str, Any]:
         optional_axes.append({"name": name, "policy_ref": policy_ref})
     if not base:
         base = ["test_type", "band", "standard", "bw", "channel"]
-    if not optional_axes:
-        optional_axes = [
-            {"name": "voltage", "policy_ref": "voltage_policy"},
-            {"name": "data_rate", "policy_ref": "data_rate_policy"},
-        ]
+    optional_axes = _ensure_policy_backed_optional_axes(optional_axes)
     dimensions_raw = dict(data.get("dimensions") or {})
     dimensions: Dict[str, Dict[str, Any]] = {}
     for name, item in dimensions_raw.items():
@@ -383,6 +383,128 @@ def normalize_case_dimensions(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     }
 
 
+def _ensure_policy_backed_optional_axes(optional_axes: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in (optional_axes or []):
+        name = str((item or {}).get("name", "")).strip()
+        policy_ref = str((item or {}).get("policy_ref", "")).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        if name in POLICY_BACKED_AXIS_TO_POLICY and not policy_ref:
+            policy_ref = POLICY_BACKED_AXIS_TO_POLICY[name]
+        normalized.append({"name": name, "policy_ref": policy_ref})
+    for axis_name, policy_key in POLICY_BACKED_AXIS_TO_POLICY.items():
+        if axis_name in seen:
+            continue
+        normalized.append({"name": axis_name, "policy_ref": policy_key})
+        seen.add(axis_name)
+    return normalized
+
+
+def policy_backed_axis_policy_key(axis_name: str, axis_payload: Dict[str, Any] | None = None) -> str:
+    axis = str(axis_name or "").strip()
+    payload = dict(axis_payload or {})
+    for candidate in (
+        str(payload.get("policy_ref", "")).strip(),
+        str(payload.get("source", "")).strip(),
+        axis,
+    ):
+        if candidate in {"voltage", "voltage_policy"}:
+            return "voltage_policy"
+        if candidate in {"data_rate", "data_rate_policy"}:
+            return "data_rate_policy"
+    return ""
+
+
+def effective_policy_backed_axis_apply_to(
+    axis_name: str,
+    axis_payload: Dict[str, Any] | None,
+    *,
+    voltage_policy: Dict[str, Any] | None,
+    data_rate_policy: Dict[str, Any] | None,
+) -> tuple[List[str], bool, str]:
+    policy_key = policy_backed_axis_policy_key(axis_name, axis_payload)
+    if policy_key == "voltage_policy":
+        policy = normalize_voltage_policy(voltage_policy or {})
+    elif policy_key == "data_rate_policy":
+        policy = normalize_data_rate_policy(data_rate_policy or {})
+    else:
+        apply_to, apply_to_defined = _normalize_apply_to(dict(axis_payload or {}).get("apply_to"))
+        return apply_to, apply_to_defined, f"case_dimensions.dimensions.{axis_name}.apply_to"
+
+    if bool(policy.get("apply_to_defined")):
+        return list(policy.get("apply_to") or []), True, f"{policy_key}.apply_to"
+
+    apply_to, apply_to_defined = _normalize_apply_to(dict(axis_payload or {}).get("apply_to"))
+    if apply_to_defined:
+        return apply_to, True, f"case_dimensions.dimensions.{axis_name}.apply_to"
+    return [], False, f"{policy_key}.apply_to"
+
+
+def sync_policy_backed_axis_contracts(
+    *,
+    case_dimensions: Dict[str, Any] | None,
+    voltage_policy: Dict[str, Any] | None,
+    data_rate_policy: Dict[str, Any] | None,
+) -> Dict[str, Dict[str, Any]]:
+    synced_case_dimensions = normalize_case_dimensions(case_dimensions or {})
+    synced_voltage_policy = normalize_voltage_policy(voltage_policy or {})
+    synced_data_rate_policy = normalize_data_rate_policy(data_rate_policy or {})
+
+    dimensions = dict(synced_case_dimensions.get("dimensions") or {})
+    optional_axes = _ensure_policy_backed_optional_axes(list(synced_case_dimensions.get("optional_axes") or []))
+
+    for axis_name, policy_key in POLICY_BACKED_AXIS_TO_POLICY.items():
+        axis_payload = dict(dimensions.get(axis_name) or {})
+        if policy_key == "voltage_policy":
+            policy = dict(synced_voltage_policy)
+        else:
+            policy = dict(synced_data_rate_policy)
+
+        axis_apply_to, axis_apply_to_defined = _normalize_apply_to(axis_payload.get("apply_to"))
+        if not bool(policy.get("apply_to_defined")) and axis_apply_to_defined:
+            policy["apply_to"] = list(axis_apply_to)
+            if policy_key == "voltage_policy":
+                synced_voltage_policy = normalize_voltage_policy(policy)
+            else:
+                synced_data_rate_policy = normalize_data_rate_policy(policy)
+
+        if not axis_payload:
+            continue
+
+        axis_payload.setdefault("name", axis_name)
+        axis_payload.setdefault("optional", True)
+        if not str(axis_payload.get("policy_ref", "")).strip():
+            axis_payload["policy_ref"] = policy_key
+        if not str(axis_payload.get("source", "")).strip():
+            axis_payload["source"] = policy_key
+
+        if policy_key == "voltage_policy":
+            effective_policy = synced_voltage_policy
+        else:
+            effective_policy = synced_data_rate_policy
+
+        if bool(effective_policy.get("apply_to_defined")):
+            axis_payload["apply_to"] = list(effective_policy.get("apply_to") or [])
+        elif axis_apply_to_defined:
+            axis_payload["apply_to"] = list(axis_apply_to)
+        else:
+            axis_payload["apply_to"] = []
+        dimensions[axis_name] = normalize_axis_definition(axis_name, axis_payload)
+
+    synced_case_dimensions["optional_axes"] = optional_axes
+    synced_case_dimensions["dimensions"] = dimensions
+    synced_case_dimensions = normalize_case_dimensions(synced_case_dimensions)
+
+    return {
+        "case_dimensions": synced_case_dimensions,
+        "voltage_policy": synced_voltage_policy,
+        "data_rate_policy": synced_data_rate_policy,
+    }
+
+
 def collect_ruleset_test_types(raw: Dict[str, Any] | None) -> List[str]:
     out: List[str] = []
     for _, band_payload in dict((raw or {}).get("bands") or {}).items():
@@ -420,9 +542,14 @@ def validate_ruleset_payload(raw: Dict[str, Any] | None) -> Dict[str, List[Dict[
         test_contracts=projected_contracts,
     )
     instrument_profiles = dict(payload.get("instrument_profiles") or {})
-    case_dimensions = normalize_case_dimensions(payload.get("case_dimensions") or {})
-    data_rate_policy = normalize_data_rate_policy(payload.get("data_rate_policy") or {})
-    voltage_policy = normalize_voltage_policy(payload.get("voltage_policy") or {})
+    synced = sync_policy_backed_axis_contracts(
+        case_dimensions=payload.get("case_dimensions") or {},
+        voltage_policy=payload.get("voltage_policy") or {},
+        data_rate_policy=payload.get("data_rate_policy") or {},
+    )
+    case_dimensions = synced["case_dimensions"]
+    data_rate_policy = synced["data_rate_policy"]
+    voltage_policy = synced["voltage_policy"]
 
     seen_band_names: set[str] = set()
     for band_name, band_payload in bands.items():
@@ -501,9 +628,9 @@ def validate_ruleset_payload(raw: Dict[str, Any] | None) -> Dict[str, List[Dict[
                     "message": f"apply_to includes '{test_type}', but it is not selectable for tech '{ruleset_tech}'.",
                 })
             if test_type not in registry_test_types:
-                errors.append({
+                warnings.append({
                     "path": f"{policy_name}.apply_to",
-                    "message": f"apply_to includes '{test_type}', but that test is not enabled by any band tests_supported entry.",
+                    "message": f"apply_to includes '{test_type}', but that test is not enabled by any band tests_supported entry yet. The policy selection will be saved and becomes active when the test is enabled for at least one band.",
                 })
 
     by_standard = dict(data_rate_policy.get("by_standard") or {})
@@ -538,6 +665,13 @@ def validate_ruleset_payload(raw: Dict[str, Any] | None) -> Dict[str, List[Dict[
     dimensions = dict(case_dimensions.get("dimensions") or {})
     seen_axis_names: set[str] = set()
     for axis_name, axis_payload in dimensions.items():
+        policy_key = policy_backed_axis_policy_key(axis_name, axis_payload)
+        effective_apply_to, _effective_apply_to_defined, effective_apply_to_path = effective_policy_backed_axis_apply_to(
+            axis_name,
+            axis_payload,
+            voltage_policy=voltage_policy,
+            data_rate_policy=data_rate_policy,
+        )
         key = str(axis_name or "").strip().lower()
         if key in seen_axis_names:
             errors.append({"path": f"case_dimensions.dimensions.{axis_name}", "message": "Duplicate axis name detected."})
@@ -551,29 +685,35 @@ def validate_ruleset_payload(raw: Dict[str, Any] | None) -> Dict[str, List[Dict[
                 "message": "Enum axis must define either values or a source.",
             })
         raw_axis_payload = dict((payload.get("case_dimensions") or {}).get("dimensions", {}).get(axis_name) or {})
-        for raw_test in list(raw_axis_payload.get("apply_to") or []):
+        if not policy_key:
+            raw_apply_to_items = list(raw_axis_payload.get("apply_to") or [])
+        elif effective_apply_to_path == f"case_dimensions.dimensions.{axis_name}.apply_to":
+            raw_apply_to_items = list(raw_axis_payload.get("apply_to") or [])
+        else:
+            raw_apply_to_items = []
+        for raw_test in raw_apply_to_items:
             if was_test_id_aliased(raw_test):
                 warnings.append({
-                    "path": f"case_dimensions.dimensions.{axis_name}.apply_to",
+                    "path": effective_apply_to_path,
                     "message": f"Alias test item '{raw_test}' should be replaced with canonical ID '{normalize_test_id(raw_test)}'.",
                 })
-        for test_type in list(axis_payload.get("apply_to") or []):
+        for test_type in effective_apply_to:
             pool_item = get_test_item_definition(test_type)
             if pool_item is None:
                 errors.append({
-                    "path": f"case_dimensions.dimensions.{axis_name}.apply_to",
+                    "path": effective_apply_to_path,
                     "message": f"Axis apply_to includes '{test_type}', but that test is not defined in the global test item pool.",
                 })
                 continue
             supported_axes = [str(item).strip() for item in (pool_item.get("supported_axes") or []) if str(item).strip()]
             if supported_axes and axis_name not in supported_axes:
                 errors.append({
-                    "path": f"case_dimensions.dimensions.{axis_name}.apply_to",
+                    "path": effective_apply_to_path,
                     "message": f"Axis '{axis_name}' is not supported by test '{test_type}'. Supported axes: {supported_axes}.",
                 })
             if test_type not in registry_test_types:
                 errors.append({
-                    "path": f"case_dimensions.dimensions.{axis_name}.apply_to",
+                    "path": effective_apply_to_path,
                     "message": f"Axis apply_to includes '{test_type}', but that test is not enabled by any band tests_supported entry.",
                 })
 
@@ -640,7 +780,12 @@ def validate_ruleset_payload(raw: Dict[str, Any] | None) -> Dict[str, List[Dict[
     selected_tests = normalize_test_id_list(registry_test_types)
     dimensions = dict(case_dimensions.get("dimensions") or {})
     for axis_name, axis_payload in dimensions.items():
-        apply_to = list(axis_payload.get("apply_to") or [])
+        apply_to, _apply_to_defined, apply_to_path = effective_policy_backed_axis_apply_to(
+            axis_name,
+            axis_payload,
+            voltage_policy=voltage_policy,
+            data_rate_policy=data_rate_policy,
+        )
         target_tests = apply_to or selected_tests
         for test_type in target_tests:
             pool_item = get_test_item_definition(test_type)
@@ -649,7 +794,7 @@ def validate_ruleset_payload(raw: Dict[str, Any] | None) -> Dict[str, List[Dict[
             supported_axes = [str(item).strip() for item in (pool_item.get("supported_axes") or []) if str(item).strip()]
             if supported_axes and axis_name not in supported_axes:
                 warnings.append({
-                    "path": f"case_dimensions.dimensions.{axis_name}",
+                    "path": apply_to_path,
                     "message": f"Axis '{axis_name}' may not apply to test '{test_type}'. Supported axes: {supported_axes}.",
                 })
 
@@ -937,6 +1082,12 @@ class RuleSet:
             test_contracts=test_contracts,
         )
 
+        synced = sync_policy_backed_axis_contracts(
+            case_dimensions=d.get("case_dimensions") or {},
+            voltage_policy=d.get("voltage_policy") or {},
+            data_rate_policy=d.get("data_rate_policy") or {},
+        )
+
         return RuleSet(
             id=rs_id,
             version=str(d.get("version", "")).strip(),
@@ -948,7 +1099,7 @@ class RuleSet:
             instrument_profile_refs=instrument_profile_refs,
             plan_modes=plan_modes,
             test_contracts=test_contracts,
-            voltage_policy=normalize_voltage_policy(d.get("voltage_policy") or {}),
-            data_rate_policy=normalize_data_rate_policy(d.get("data_rate_policy") or {}),
-            case_dimensions=normalize_case_dimensions(d.get("case_dimensions") or {}),
+            voltage_policy=synced["voltage_policy"],
+            data_rate_policy=synced["data_rate_policy"],
+            case_dimensions=synced["case_dimensions"],
         )

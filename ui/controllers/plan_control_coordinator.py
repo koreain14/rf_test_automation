@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
+from domain.ruleset_models import collect_ruleset_test_types
 from ui.correction_settings_dialog import CorrectionSettingsDialog
 from ui.execution_order_dialog import ExecutionOrderDialog
 from ui.motion_settings_dialog import MotionSettingsDialog
@@ -122,6 +126,36 @@ class PlanControlCoordinator:
         ctx = self.controller._current_context()
         return self.control_service.current_correction(ctx.recipe) if ctx else {}
 
+    def _resolve_current_ruleset_id(self, ctx) -> str:
+        preset = getattr(ctx, "preset", None) if ctx is not None else None
+        ruleset_id = str(getattr(preset, "ruleset_id", "") or "").strip()
+        if ruleset_id:
+            return ruleset_id
+        recipe = getattr(ctx, "recipe", None) if ctx is not None else None
+        meta = dict((getattr(recipe, "meta", {}) or {})) if recipe is not None else {}
+        ruleset_id = str(meta.get("ruleset_id", "") or "").strip()
+        return ruleset_id or "KC_WLAN"
+
+    def _load_ruleset_test_types(self, ruleset_id: str) -> list[str]:
+        normalized = str(ruleset_id or "").strip()
+        if not normalized:
+            return []
+        path = Path(getattr(self.window.svc, "ruleset_dir", Path("rulesets"))) / f"{normalized.lower()}.json"
+        if not path.exists() and normalized.upper() == "KC_WLAN":
+            alt = Path(getattr(self.window.svc, "ruleset_dir", Path("rulesets"))) / "kc_wlan.json"
+            if alt.exists():
+                path = alt
+        if not path.exists():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        try:
+            return collect_ruleset_test_types(payload)
+        except Exception:
+            return []
+
     def edit_motion_settings(self) -> None:
         ctx = self.controller._current_context()
         if not ctx:
@@ -135,9 +169,12 @@ class PlanControlCoordinator:
         if not ctx:
             return
         bound_path = self.current_antenna() or self.current_switch_path() or ""
+        ruleset_id = self._resolve_current_ruleset_id(ctx)
         dlg = CorrectionSettingsDialog(
             initial=self.current_correction_settings(),
             current_bound_path=bound_path,
+            ruleset_test_types=self._load_ruleset_test_types(ruleset_id),
+            ruleset_id=ruleset_id,
             parent=self.window,
         )
         if dlg.exec():

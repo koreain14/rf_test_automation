@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -18,10 +18,32 @@ from PySide6.QtWidgets import (
 
 from application.correction_profile_loader import CorrectionProfileLoader
 from application.correction_profile_model import CorrectionFactorSet, CorrectionProfileDocument
-from application.correction_runtime import calculate_total_correction_db, normalize_correction_meta
+from application.correction_runtime import (
+    calculate_total_correction_db,
+    correction_capability_for_test_type,
+    filter_supported_correction_test_types,
+    normalize_correction_meta,
+)
+from domain.test_item_registry import canonical_test_label
 
 
-_DEFAULT_APPLIES_TO = ["CHP", "PSD", "OBW", "TXP"]
+_LEGACY_DEFAULT_APPLIES_TO = ["CHP", "PSD", "OBW", "TXP"]
+_CAPABILITY_UI_LABELS = {
+    "DIRECT_DB": "direct dB",
+    "PSD_CANONICAL_DB": "canonical dBm/MHz",
+}
+
+
+def _normalize_applies_to(values: Iterable[str] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values or ():
+        normalized = str(value or "").strip().upper()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
 
 
 class CorrectionSettingsDialog(QDialog):
@@ -30,11 +52,13 @@ class CorrectionSettingsDialog(QDialog):
         *,
         initial: dict | None = None,
         current_bound_path: str | None = None,
+        ruleset_test_types: Iterable[str] | None = None,
+        ruleset_id: str | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Correction Settings")
-        self.resize(460, 430)
+        self.resize(460, 480)
 
         self._loader = CorrectionProfileLoader()
         self._profiles_by_name = {
@@ -44,6 +68,14 @@ class CorrectionSettingsDialog(QDialog):
         }
         self._initial = normalize_correction_meta({"correction": dict(initial or {})})
         self._current_bound_path = str(current_bound_path or "").strip()
+        self._ruleset_id = str(ruleset_id or "").strip()
+        self._legacy_default_applies_to = filter_supported_correction_test_types(_LEGACY_DEFAULT_APPLIES_TO)
+        self._available_applies_to = self._resolve_available_applies_to(ruleset_test_types)
+        self._initial_applies_to = _normalize_applies_to((initial or {}).get("applies_to") or self._initial.get("applies_to") or [])
+        self._preserved_hidden_applies_to = [
+            item for item in self._initial_applies_to if item not in self._available_applies_to
+        ]
+        self._applies_to_checks: dict[str, QCheckBox] = {}
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -71,11 +103,41 @@ class CorrectionSettingsDialog(QDialog):
         self.offset_spin.setSuffix(" dB")
         form.addRow("Manual Offset", self.offset_spin)
 
+        self.applies_to_widget = QWidget()
+        applies_to_layout = QVBoxLayout(self.applies_to_widget)
+        applies_to_layout.setContentsMargins(0, 0, 0, 0)
+        applies_to_layout.setSpacing(4)
+
+        scope_text = "Available from current RuleSet"
+        if self._ruleset_id:
+            scope_text = f"Available from current RuleSet ({self._ruleset_id})"
+        self.applies_to_scope_label = QLabel(scope_text)
+        self.applies_to_scope_label.setWordWrap(True)
+        applies_to_layout.addWidget(self.applies_to_scope_label)
+
+        self.applies_to_help_label = QLabel("Correction-capable tests only")
+        self.applies_to_help_label.setWordWrap(True)
+        applies_to_layout.addWidget(self.applies_to_help_label)
+
+        self.applies_to_checks_widget = QWidget()
+        self.applies_to_checks_layout = QVBoxLayout(self.applies_to_checks_widget)
+        self.applies_to_checks_layout.setContentsMargins(0, 0, 0, 0)
+        self.applies_to_checks_layout.setSpacing(2)
+        applies_to_layout.addWidget(self.applies_to_checks_widget)
+
+        self.applies_to_empty_label = QLabel("No correction-capable tests found for the current RuleSet.")
+        self.applies_to_empty_label.setWordWrap(True)
+        applies_to_layout.addWidget(self.applies_to_empty_label)
+
+        self.applies_to_hidden_label = QLabel()
+        self.applies_to_hidden_label.setWordWrap(True)
+        applies_to_layout.addWidget(self.applies_to_hidden_label)
+
         self.applies_to_edit = QLineEdit()
         self.applies_to_edit.setReadOnly(True)
-        applies_to = list(self._initial.get("applies_to") or []) or list(_DEFAULT_APPLIES_TO)
-        self.applies_to_edit.setText(", ".join(str(item or "").strip().upper() for item in applies_to if str(item or "").strip()))
-        form.addRow("Applies To", self.applies_to_edit)
+        applies_to_layout.addWidget(self.applies_to_edit)
+
+        form.addRow("Applies To", self.applies_to_widget)
 
         self.bound_path_edit = QLineEdit()
         self.bound_path_edit.setReadOnly(True)
@@ -111,8 +173,86 @@ class CorrectionSettingsDialog(QDialog):
         self.profile_combo.currentTextChanged.connect(self._on_profile_changed)
         self.offset_spin.valueChanged.connect(self._refresh_summary)
 
+        self._rebuild_applies_to_checkboxes()
         self._sync_mode_from_selection()
         self._refresh_summary()
+
+    def _resolve_available_applies_to(self, ruleset_test_types: Iterable[str] | None) -> list[str]:
+        candidates = filter_supported_correction_test_types(ruleset_test_types)
+        if candidates:
+            return candidates
+        fallback_source = self._initial.get("applies_to") or _LEGACY_DEFAULT_APPLIES_TO
+        fallback = filter_supported_correction_test_types(fallback_source)
+        return fallback or list(self._legacy_default_applies_to)
+
+    def _default_visible_applies_to(self) -> list[str]:
+        defaults = [item for item in self._legacy_default_applies_to if item in self._available_applies_to]
+        return defaults or list(self._available_applies_to)
+
+    def _selected_visible_applies_to(self) -> list[str]:
+        out: list[str] = []
+        for test_type in self._available_applies_to:
+            checkbox = self._applies_to_checks.get(test_type)
+            if checkbox is not None and checkbox.isChecked():
+                out.append(test_type)
+        return out
+
+    def _effective_applies_to(self) -> list[str]:
+        selected_visible = self._selected_visible_applies_to()
+        if not selected_visible:
+            selected_visible = self._default_visible_applies_to()
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in [*selected_visible, *self._preserved_hidden_applies_to]:
+            normalized = str(item or "").strip().upper()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(normalized)
+        return out
+
+    def _checkbox_label(self, test_type: str) -> str:
+        label = canonical_test_label(test_type)
+        capability = correction_capability_for_test_type(test_type)
+        capability_label = _CAPABILITY_UI_LABELS.get(capability, capability.replace("_", " ").lower())
+        if label and label != test_type and capability_label:
+            return f"{test_type} ({label}, {capability_label})"
+        if capability_label:
+            return f"{test_type} ({capability_label})"
+        return test_type
+
+    def _rebuild_applies_to_checkboxes(self) -> None:
+        initial_selected = set(self._initial.get("applies_to") or [])
+        default_selected = set(self._default_visible_applies_to())
+        while self.applies_to_checks_layout.count():
+            item = self.applies_to_checks_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        self._applies_to_checks.clear()
+        for test_type in self._available_applies_to:
+            checkbox = QCheckBox(self._checkbox_label(test_type))
+            checkbox.setChecked(test_type in initial_selected if initial_selected else test_type in default_selected)
+            checkbox.toggled.connect(self._refresh_summary)
+            self.applies_to_checks_layout.addWidget(checkbox)
+            self._applies_to_checks[test_type] = checkbox
+
+        self.applies_to_checks_widget.setVisible(bool(self._available_applies_to))
+        self.applies_to_empty_label.setVisible(not bool(self._available_applies_to))
+        if self._preserved_hidden_applies_to:
+            preserved = ", ".join(self._preserved_hidden_applies_to)
+            self.applies_to_hidden_label.setText(
+                f"Existing non-visible selections are preserved for compatibility: {preserved}"
+            )
+            self.applies_to_hidden_label.setVisible(True)
+        else:
+            self.applies_to_hidden_label.clear()
+            self.applies_to_hidden_label.setVisible(False)
+        self._sync_applies_to_text()
+
+    def _sync_applies_to_text(self) -> None:
+        self.applies_to_edit.setText(", ".join(self._effective_applies_to()))
 
     def _reload_profile_options(self, selected_name: str | None = None) -> None:
         current_name = str(selected_name or "").strip()
@@ -215,6 +355,7 @@ class CorrectionSettingsDialog(QDialog):
         enabled = self.enable_check.isChecked()
         self.profile_combo.setEnabled(enabled)
         self.offset_spin.setEnabled(enabled)
+        self.applies_to_widget.setEnabled(enabled)
         if not enabled:
             return
 
@@ -231,6 +372,7 @@ class CorrectionSettingsDialog(QDialog):
         self._refresh_summary()
 
     def _refresh_summary(self, *_args) -> None:
+        self._sync_applies_to_text()
         self.summary_view.setPlainText("\n".join(self._summary_lines()))
         self._sync_mode_from_selection()
 
@@ -241,13 +383,6 @@ class CorrectionSettingsDialog(QDialog):
         return str(self.profile_combo.currentText() or "").strip()
 
     def settings(self) -> dict:
-        applies_to = [
-            str(item or "").strip().upper()
-            for item in self.applies_to_edit.text().split(",")
-            if str(item or "").strip()
-        ]
-        if not applies_to:
-            applies_to = list(_DEFAULT_APPLIES_TO)
         return {
             "enabled": self.enable_check.isChecked(),
             "mode": str(self.mode_combo.currentText() or "DIRECT").strip().upper() or "DIRECT",
@@ -257,5 +392,6 @@ class CorrectionSettingsDialog(QDialog):
                 "field": "antenna",
             },
             "manual_offset_db": float(self.offset_spin.value()),
-            "applies_to": applies_to,
+            "applies_to": self._effective_applies_to(),
+            "version": 1,
         }

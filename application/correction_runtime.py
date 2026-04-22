@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, Dict, Tuple
 
 from application.correction_profile_model import CorrectionFactorSet, CorrectionProfileDocument
+from application.test_type_symbols import normalize_test_type_symbol
 
 
-_ALLOWED_TEST_TYPES = {"CHP", "PSD", "TXP"}
+CORRECTION_CAPABILITY: dict[str, str] = {
+    "CHP": "DIRECT_DB",
+    "TXP": "DIRECT_DB",
+    "PSD": "PSD_CANONICAL_DB",
+}
+_ALLOWED_TEST_TYPES = set(CORRECTION_CAPABILITY)
 _UPPER_LIMIT_COMPARATORS = {"", "upper_limit", "max", "maximum", "lte", "le"}
 _LOWER_LIMIT_COMPARATORS = {"lower_limit", "min", "minimum", "gte", "ge"}
 
@@ -23,10 +30,38 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return int(default)
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def correction_capability_for_test_type(test_type: str | None) -> str:
+    normalized = normalize_test_type_symbol(test_type)
+    return str(CORRECTION_CAPABILITY.get(normalized, ""))
+
+
+def filter_supported_correction_test_types(values: Iterable[str] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values or ():
+        normalized = normalize_test_type_symbol(value)
+        if not normalized or normalized in seen:
+            continue
+        if normalized not in CORRECTION_CAPABILITY:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
 def normalize_correction_meta(meta: dict | None) -> dict[str, Any]:
     payload = _as_dict(_as_dict(meta).get("correction"))
     binding = _as_dict(payload.get("binding"))
-    applies_to = [str(item or "").strip().upper() for item in (payload.get("applies_to") or []) if str(item or "").strip()]
+    applies_to = filter_supported_correction_test_types(payload.get("applies_to") or [])
     return {
         "enabled": bool(payload.get("enabled")),
         "mode": str(payload.get("mode") or "DIRECT").strip().upper() or "DIRECT",
@@ -37,6 +72,7 @@ def normalize_correction_meta(meta: dict | None) -> dict[str, Any]:
         },
         "manual_offset_db": float(payload.get("manual_offset_db") or 0.0),
         "applies_to": applies_to,
+        "version": max(1, _as_int(payload.get("version"), 1)),
     }
 
 

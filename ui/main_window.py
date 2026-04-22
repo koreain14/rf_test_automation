@@ -561,12 +561,30 @@ class MainWindow(QMainWindow):
         previous = dict(payload.get("previous") or {})
         instructions = list(payload.get("instructions") or [])
         dut_control_mode = format_dut_control_mode(str(payload.get("dut_control_mode") or "manual"))
+        prompt_kind = str(payload.get("prompt_kind") or "").strip().lower()
+
+        if prompt_kind == "data_rate_change":
+            lines = []
+            if previous and any(str(previous.get(key, "") or "").strip() for key in ("standard", "data_rate")):
+                lines.append("Previous setup:")
+                if str(previous.get("standard", "") or "").strip():
+                    lines.append(f"Standard: {previous.get('standard')}")
+                if str(previous.get("data_rate", "") or "").strip():
+                    lines.append(f"Data Rate: {previous.get('data_rate')}")
+                lines.append("")
+            lines.append(f"Standard: {current.get('standard') or payload.get('standard') or '-'}")
+            lines.append(f"Data Rate: {current.get('data_rate') or payload.get('requested_data_rate') or '-'}")
+            lines.append("")
+            lines.append("Please update the DUT/AP setting, then continue.")
+            return "\n".join(lines)
 
         lines = ["Change DUT settings:", ""]
         lines.append(f"Control mode: {dut_control_mode}")
         lines.append("")
         if previous and any(v not in (None, "") for v in previous.values()):
             lines.append("Previous setup:")
+            if previous.get("standard") not in (None, ""):
+                lines.append(f"- Standard: {previous.get('standard')}")
             if previous.get("band") not in (None, ""):
                 lines.append(f"- Band: {previous.get('band')}")
             if previous.get("center_freq_mhz") not in (None, ""):
@@ -575,6 +593,8 @@ class MainWindow(QMainWindow):
                 lines.append(f"- Bandwidth: {previous.get('bw_mhz')} MHz")
             if previous.get("phy_mode") not in (None, ""):
                 lines.append(f"- Mode: {previous.get('phy_mode')}")
+            if previous.get("data_rate") not in (None, ""):
+                lines.append(f"- Data Rate: {previous.get('data_rate')}")
             if previous.get("voltage_condition") not in (None, ""):
                 lines.append(f"- Voltage Condition: {previous.get('voltage_condition')}")
             if previous.get("target_voltage_v") not in (None, ""):
@@ -584,6 +604,8 @@ class MainWindow(QMainWindow):
             lines.append("")
 
         lines.append("New setup:")
+        if current.get("standard") not in (None, ""):
+            lines.append(f"- Standard: {current.get('standard')}")
         if current.get("band") not in (None, ""):
             lines.append(f"- Band: {current.get('band')}")
         if current.get("center_freq_mhz") not in (None, ""):
@@ -592,6 +614,8 @@ class MainWindow(QMainWindow):
             lines.append(f"- Bandwidth: {current.get('bw_mhz')} MHz")
         if current.get("phy_mode") not in (None, ""):
             lines.append(f"- Mode: {current.get('phy_mode')}")
+        if current.get("data_rate") not in (None, ""):
+            lines.append(f"- Data Rate: {current.get('data_rate')}")
         if current.get("voltage_condition") not in (None, ""):
             lines.append(f"- Voltage Condition: {current.get('voltage_condition')}")
         if current.get("target_voltage_v") not in (None, ""):
@@ -613,6 +637,7 @@ class MainWindow(QMainWindow):
         dlg = DutChannelMonitorDialog(
             payload=payload,
             instructions_text=self._build_dut_change_dialog_text(payload),
+            window_title=str(payload.get("dialog_title") or ""),
             start_monitor_callback=self._start_dut_monitor_preview,
             parent=self,
         )

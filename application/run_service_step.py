@@ -209,6 +209,16 @@ class RunServiceStep:
                 if not accepted:
                     return "ABORTED"
 
+                accepted = self.case_pipeline.handle_data_rate_change_prompt(
+                    run_id=run_id,
+                    dut_control_mode=environment.dut_control_mode,
+                    previous_case=previous_case,
+                    current_case=case,
+                    prompt_reconfigure=prompt_reconfigure,
+                )
+                if not accepted:
+                    return "ABORTED"
+
                 _, verdict = self.case_pipeline.execute_case(
                     project_id=project_id,
                     preset_id=preset_id,

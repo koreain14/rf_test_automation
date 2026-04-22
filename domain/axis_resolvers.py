@@ -62,7 +62,8 @@ def get_axis_resolver(axis_name: str, axis_def: Dict[str, Any]) -> AxisResolver:
 
 def resolve_axis_values(context: AxisResolverContext) -> List[AxisPayload]:
     current_test_type = str(dict(context.state.get("fields") or {}).get("test_type", "") or "")
-    if current_test_type and not axis_applies_to_test(context.axis_def, current_test_type):
+    axis_gate_applies = not _policy_apply_to_overrides_axis(context)
+    if current_test_type and axis_gate_applies and not axis_applies_to_test(context.axis_def, current_test_type):
         mode = axis_effective_non_applicable_mode(context.axis_name, context.axis_def)
         if mode == "OMIT":
             return []
@@ -130,6 +131,22 @@ def apply_to_is_restricted(values: Any, apply_to_defined: Any = False) -> tuple[
     # Empty apply_to must behave as unrestricted even if older payloads persisted
     # apply_to_defined=true with an empty list.
     return normalized, bool(normalized)
+
+
+def _policy_key_for_axis(axis_name: str, axis_def: Dict[str, Any]) -> str:
+    source = str(axis_def.get("source", "") or "").strip()
+    policy_ref = str(axis_def.get("policy_ref", "") or "").strip()
+    for candidate in (policy_ref, source, str(axis_name or "").strip()):
+        if candidate in {"voltage_policy", "voltage"}:
+            return "voltage_policy"
+        if candidate in {"data_rate_policy", "data_rate"}:
+            return "data_rate_policy"
+    return ""
+
+
+def _policy_apply_to_overrides_axis(context: "AxisResolverContext") -> bool:
+    policy_key = _policy_key_for_axis(context.axis_name, context.axis_def)
+    return bool(policy_key)
 
 
 def axis_applies_to_test(axis_def: Dict[str, Any], test_type: str) -> bool:
