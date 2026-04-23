@@ -221,6 +221,25 @@ class PreflightService:
         correction = normalize_correction_meta(meta)
         if not correction.get("enabled"):
             return
+        storage_kind = str(correction.get("storage_kind") or "")
+        if storage_kind == "instrument_factor":
+            mode = str(correction.get("mode") or "instrument").strip().lower()
+            if mode not in {"instrument", "off"}:
+                result.add_error("CORRECTION_MODE_INVALID", f"Unsupported correction mode: {mode}")
+                return
+            manual_override = dict(correction.get("manual_override") or {})
+            apply_model = str(correction.get("apply_model") or "auto").strip().lower()
+            if apply_model not in {"auto", "manual"}:
+                result.add_error("CORRECTION_APPLY_MODEL_INVALID", f"Unsupported correction apply model: {apply_model}")
+            if mode == "instrument" and (manual_override.get("enabled") or apply_model == "manual"):
+                set_id = str(manual_override.get("set_id") or "").strip()
+                if not set_id:
+                    result.add_error(
+                        "CORRECTION_MANUAL_SET_MISSING",
+                        "Manual Override is selected, but no Correction Set / Factor Group is specified.",
+                    )
+            return
+
         mode = str(correction.get("mode") or "DIRECT").strip().upper()
         if mode not in {"DIRECT", "SWITCH"}:
             result.add_error("CORRECTION_MODE_INVALID", f"Unsupported correction mode: {mode}")

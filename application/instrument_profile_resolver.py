@@ -49,7 +49,8 @@ class InstrumentProfileResolver:
             "detector": "POSITIVE",
         },
         "TXP_DEFAULT": {
-            "span_hz": 100_000_000,
+            "span_mode": "BW_X2",
+            "span_min_hz": 20_000_000,
             "rbw_hz": 100_000,
             "vbw_hz": 300_000,
             "ref_level_dbm": 20,

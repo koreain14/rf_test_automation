@@ -175,6 +175,7 @@ class RunServiceStep:
             with self._active_environment_lock:
                 self._active_environment = environment
             self.metadata_recorder.update_run_metadata(run_id=run_id, metadata=environment.run_metadata)
+            self.case_pipeline.reset_runtime_correction_state()
 
             runner = self.case_pipeline.create_runner(project_id=project_id)
 
@@ -245,6 +246,7 @@ class RunServiceStep:
         finally:
             with self._active_environment_lock:
                 self._active_environment = None
+            self.case_pipeline.reset_runtime_correction_state()
             self.session_coordinator.cleanup(
                 getattr(environment, "session", None),
                 getattr(environment, "power_control", None),

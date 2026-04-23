@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
 from application.correction_profile_loader import CorrectionProfileLoader
-from application.correction_runtime import apply_correction_to_result, format_correction_summary, normalize_correction_meta
+from application.correction_runtime import (
+    apply_correction_to_result,
+    format_correction_summary,
+    normalize_correction_meta,
+    resolve_runtime_correction,
+)
 from application.execution_builder import ExecutionBuilder
 from application.executor_factory import ExecutorFactory
 from application.instrument_manager import InstrumentManager
@@ -22,6 +27,51 @@ from infrastructure.run_repo_sqlite import RunRepositorySQLite
 
 
 log = logging.getLogger(__name__)
+
+
+def _normalize_correction_factor_no(value: Any) -> int | None:
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    if text.startswith("CSET"):
+        text = text[4:].strip()
+    if not text.isdigit():
+        return None
+    number = int(text)
+    return number if number > 0 else None
+
+
+def _correction_cset_command(factor_no: int, enabled: bool) -> str:
+    state = "ON" if enabled else "OFF"
+    return f":SENS:CORR:CSET{int(factor_no)} {state}"
+
+
+def _iter_scpi_write_targets(obj: Any):
+    visited: set[int] = set()
+    queue = [obj]
+    while queue:
+        current = queue.pop(0)
+        if current is None:
+            continue
+        ident = id(current)
+        if ident in visited:
+            continue
+        visited.add(ident)
+        if callable(getattr(current, "write", None)):
+            yield current
+        for attr in ("driver", "instrument", "device", "resource", "session", "analyzer", "_session", "inst"):
+            if not hasattr(current, attr):
+                continue
+            try:
+                queue.append(getattr(current, attr))
+            except Exception:
+                pass
+
+
+def _resolve_scpi_write_target(inst: Any):
+    for target in _iter_scpi_write_targets(inst):
+        return target
+    return None
 
 
 @dataclass
@@ -625,10 +675,242 @@ class CaseExecutionPipeline:
         self.metadata_recorder = metadata_recorder
         self.voltage_controller = VoltageConditionController(run_repo)
         self.correction_loader = CorrectionProfileLoader()
+        self._last_correction_signature: tuple[Any, ...] | None = None
+        self._last_correction_factor_numbers: tuple[int, ...] = ()
+        self._last_correction_scpi_status = ""
+
+    def reset_runtime_correction_state(self) -> None:
+        self._last_correction_signature = None
+        self._last_correction_factor_numbers = ()
+        self._last_correction_scpi_status = ""
+
+    def _resolved_correction_factor_numbers(self, resolution: dict[str, Any]) -> tuple[int, ...]:
+        out: list[int] = []
+        for factor_id in list(resolution.get("resolved_factors") or []):
+            number = _normalize_correction_factor_no(factor_id)
+            if number is None:
+                continue
+            if number not in out:
+                out.append(number)
+        return tuple(out)
+
+    def _apply_correction_cset_scpi_delta(self, inst, resolution: dict[str, Any]) -> dict[str, Any]:
+        current_factors = self._resolved_correction_factor_numbers(resolution)
+        active = (
+            bool(resolution.get("enabled"))
+            and str(resolution.get("storage_kind") or "") == "instrument_factor"
+            and str(resolution.get("mode") or "").lower() == "instrument"
+            and str(resolution.get("reason") or "") == "READY"
+        )
+        if not active:
+            current_factors = ()
+
+        signature = (
+            bool(active),
+            str(resolution.get("current_path") or ""),
+            str(resolution.get("measurement_role") or ""),
+            current_factors,
+        )
+        previous_factors = set(self._last_correction_factor_numbers)
+        current_factor_set = set(current_factors)
+        off_factors = tuple(sorted(previous_factors - current_factor_set))
+        on_factors = tuple(sorted(current_factor_set - previous_factors))
+        commands = [
+            _correction_cset_command(factor_no, False)
+            for factor_no in off_factors
+        ] + [
+            _correction_cset_command(factor_no, True)
+            for factor_no in on_factors
+        ]
+        skipped_factor_ids = [
+            str(factor_id)
+            for factor_id in list(resolution.get("resolved_factors") or [])
+            if _normalize_correction_factor_no(factor_id) is None
+        ]
+        trace = {
+            "correction_scpi_status": "SKIPPED",
+            "correction_scpi_commands": list(commands),
+            "correction_scpi_on_factors": list(on_factors),
+            "correction_scpi_off_factors": list(off_factors),
+            "correction_scpi_active_factors": list(current_factors),
+            "correction_scpi_previous_factors": list(self._last_correction_factor_numbers),
+            "correction_scpi_skipped_factor_ids": skipped_factor_ids,
+            "correction_scpi_signature_changed": signature != self._last_correction_signature,
+        }
+
+        if signature == self._last_correction_signature:
+            trace["correction_scpi_status"] = (
+                "SKIPPED_UNCHANGED_NO_WRITE"
+                if self._last_correction_scpi_status == "NO_WRITE_CAPABILITY"
+                else "SKIPPED_UNCHANGED"
+            )
+            return trace
+
+        target = _resolve_scpi_write_target(inst)
+        if target is None:
+            trace["correction_scpi_status"] = "NO_WRITE_CAPABILITY"
+            self._last_correction_signature = signature
+            self._last_correction_factor_numbers = current_factors
+            self._last_correction_scpi_status = str(trace["correction_scpi_status"])
+            log.info(
+                "correction SCPI no-op | path=%s measurement_role=%s factors=%s reason=%s",
+                resolution.get("current_path", ""),
+                resolution.get("measurement_role", ""),
+                list(current_factors),
+                trace["correction_scpi_status"],
+            )
+            return trace
+
+        if not commands:
+            trace["correction_scpi_status"] = "NO_FACTOR_DELTA"
+            self._last_correction_signature = signature
+            self._last_correction_factor_numbers = current_factors
+            self._last_correction_scpi_status = str(trace["correction_scpi_status"])
+            log.info(
+                "correction SCPI unchanged factors | path=%s measurement_role=%s factors=%s skipped_factor_ids=%s",
+                resolution.get("current_path", ""),
+                resolution.get("measurement_role", ""),
+                list(current_factors),
+                skipped_factor_ids,
+            )
+            return trace
+
+        try:
+            for command in commands:
+                log.info(
+                    "correction SCPI write | path=%s measurement_role=%s command=%s resolved_factors=%s",
+                    resolution.get("current_path", ""),
+                    resolution.get("measurement_role", ""),
+                    command,
+                    list(resolution.get("resolved_factors") or []),
+                )
+                target.write(command)
+        except Exception as exc:
+            trace["correction_scpi_status"] = "ERROR"
+            trace["correction_scpi_error"] = str(exc)
+            log.warning(
+                "correction SCPI apply failed | path=%s measurement_role=%s commands=%s err=%s",
+                resolution.get("current_path", ""),
+                resolution.get("measurement_role", ""),
+                commands,
+                exc,
+                exc_info=True,
+            )
+            return trace
+
+        trace["correction_scpi_status"] = "APPLIED" if active else "DISABLED"
+        self._last_correction_signature = signature
+        self._last_correction_factor_numbers = current_factors
+        self._last_correction_scpi_status = str(trace["correction_scpi_status"])
+        return trace
 
     def create_runner(self, *, project_id: str) -> StepRunner:
         sink = StepResultSinkSQLite(self.run_repo, project_id)
         return StepRunner(ProcedureRegistry(), sink)
+
+    def _invoke_runtime_correction_api(self, inst, resolution: dict[str, Any]) -> dict[str, Any]:
+        trace = {
+            "correction_enabled": bool(resolution.get("enabled")),
+            "correction_mode": str(resolution.get("mode") or ""),
+            "correction_bound_path": str(resolution.get("current_path") or ""),
+            "resolved_factors": list(resolution.get("resolved_factors") or []),
+            "resolved_set": str(resolution.get("resolved_set") or ""),
+            "resolved_sets": list(resolution.get("resolved_sets") or []),
+            "measurement_role": str(resolution.get("measurement_role") or ""),
+            "apply_model": str(resolution.get("apply_model") or ""),
+            "correction_breakdown": {
+                "storage_kind": str(resolution.get("storage_kind") or ""),
+                "measurement_role": str(resolution.get("measurement_role") or ""),
+                "current_path": str(resolution.get("current_path") or ""),
+                "resolved_factors": list(resolution.get("resolved_factors") or []),
+                "resolved_set": str(resolution.get("resolved_set") or ""),
+                "resolved_sets": list(resolution.get("resolved_sets") or []),
+            },
+            "correction_applied": False,
+            "reason": str(resolution.get("reason") or "DISABLED"),
+            "instrument_apply_status": "SKIPPED",
+        }
+        scpi_trace = self._apply_correction_cset_scpi_delta(inst, resolution)
+        trace.update(scpi_trace)
+        trace["correction_breakdown"].update(
+            {
+                "correction_scpi_status": scpi_trace.get("correction_scpi_status", ""),
+                "correction_scpi_commands": list(scpi_trace.get("correction_scpi_commands") or []),
+                "correction_scpi_active_factors": list(scpi_trace.get("correction_scpi_active_factors") or []),
+                "correction_scpi_previous_factors": list(scpi_trace.get("correction_scpi_previous_factors") or []),
+            }
+        )
+        if not resolution.get("enabled"):
+            if scpi_trace.get("correction_scpi_status") in {"APPLIED", "DISABLED", "NO_FACTOR_DELTA", "NO_WRITE_CAPABILITY"}:
+                trace["instrument_apply_status"] = str(scpi_trace.get("correction_scpi_status") or "SKIPPED")
+            return trace
+        if str(resolution.get("storage_kind") or "") != "instrument_factor":
+            trace["instrument_apply_status"] = "LEGACY_RESULT_CORRECTION"
+            return trace
+        if str(resolution.get("mode") or "").lower() != "instrument":
+            trace["instrument_apply_status"] = "MODE_OFF"
+            return trace
+        if str(resolution.get("reason") or "") not in {"READY", "MODE_OFF"}:
+            trace["instrument_apply_status"] = str(scpi_trace.get("correction_scpi_status") or "NO_RESOLVED_FACTORS")
+            return trace
+        if inst is None:
+            trace["instrument_apply_status"] = "NO_INSTRUMENT"
+            trace["reason"] = "NO_INSTRUMENT"
+            return trace
+
+        enabled = bool(resolution.get("resolved_factors")) or bool(resolution.get("resolved_set"))
+        resolved_factors = list(resolution.get("resolved_factors") or [])
+        resolved_set = str(resolution.get("resolved_set") or "")
+        if scpi_trace.get("correction_scpi_status") in {"APPLIED", "SKIPPED_UNCHANGED", "NO_FACTOR_DELTA"}:
+            trace["correction_applied"] = enabled
+            trace["instrument_apply_status"] = str(scpi_trace.get("correction_scpi_status") or "APPLIED_SCPI")
+            return trace
+        try:
+            if hasattr(inst, "apply_correction_selection"):
+                inst.apply_correction_selection(
+                    enabled=enabled,
+                    factor_ids=resolved_factors,
+                    resolved_set_id=resolved_set,
+                    context=dict(resolution),
+                )
+                trace["correction_applied"] = enabled
+                trace["instrument_apply_status"] = "APPLIED_MULTI"
+                return trace
+            if hasattr(inst, "apply_correction_factors"):
+                inst.apply_correction_factors(resolved_factors)
+                if hasattr(inst, "set_correction_enabled"):
+                    inst.set_correction_enabled(enabled)
+                trace["correction_applied"] = enabled
+                trace["instrument_apply_status"] = "APPLIED_FACTORS"
+                return trace
+            if hasattr(inst, "apply_correction_set"):
+                inst.apply_correction_set(resolved_set)
+                if hasattr(inst, "set_correction_enabled"):
+                    inst.set_correction_enabled(enabled)
+                trace["correction_applied"] = enabled
+                trace["instrument_apply_status"] = "APPLIED_SINGLE_SET"
+                return trace
+            if hasattr(inst, "set_correction_enabled") and not enabled:
+                inst.set_correction_enabled(False)
+                trace["instrument_apply_status"] = "DISABLED_ON_INSTRUMENT"
+                return trace
+        except Exception as exc:
+            trace["instrument_apply_status"] = "ERROR"
+            trace["reason"] = f"INSTRUMENT_APPLY_ERROR: {exc}"
+            trace["error"] = str(exc)
+            return trace
+
+        trace["instrument_apply_status"] = "INSTRUMENT_API_UNAVAILABLE"
+        trace["reason"] = "INSTRUMENT_API_UNAVAILABLE"
+        return trace
+
+    def _apply_runtime_correction_before_measurement(self, *, recipe, case, inst) -> dict[str, Any]:
+        recipe_meta = getattr(recipe, "meta", {}) or {}
+        resolution = resolve_runtime_correction(recipe_meta, case)
+        apply_trace = self._invoke_runtime_correction_api(inst, resolution)
+        apply_trace.setdefault("test_type", str(getattr(case, "test_type", "") or ""))
+        apply_trace.setdefault("case_key", str(getattr(case, "key", "") or ""))
+        return apply_trace
 
     def iter_cases_for_execution(self, *, ruleset, recipe, overrides, selected_case_keys: Optional[list[str]] = None):
         cases_it = apply_overrides(expand_recipe(ruleset, recipe), overrides)
@@ -826,6 +1108,18 @@ class CaseExecutionPipeline:
             power_control=power_control,
             equipment_profile_name=equipment_profile_name,
         )
+        correction_apply_trace = self._apply_runtime_correction_before_measurement(
+            recipe=recipe,
+            case=case,
+            inst=inst,
+        )
+        self.run_repo.append_step_result(
+            project_id=project_id,
+            result_id=result_id,
+            step_name="CORRECTION_APPLY",
+            status="OK" if correction_apply_trace.get("correction_applied") else "INFO",
+            data=correction_apply_trace,
+        )
         values = runner.run_case(run_id, result_id, case, inst)
         correction_meta = dict((getattr(recipe, "meta", {}) or {}).get("correction") or {})
         correction_profile = self.correction_loader.get_profile(str(correction_meta.get("profile_name", "") or ""))
@@ -835,15 +1129,29 @@ class CaseExecutionPipeline:
             case=case,
             profile=correction_profile,
         )
+        merged_breakdown = dict(correction_trace.get("correction_breakdown") or {})
+        merged_breakdown.update(
+            {
+                "instrument_apply_status": correction_apply_trace.get("instrument_apply_status", ""),
+                "resolved_factors": list(correction_apply_trace.get("resolved_factors") or []),
+                "resolved_set": str(correction_apply_trace.get("resolved_set") or ""),
+                "resolved_sets": list(correction_apply_trace.get("resolved_sets") or []),
+                "measurement_role": str(correction_apply_trace.get("measurement_role") or ""),
+            }
+        )
+        correction_trace["correction_breakdown"] = merged_breakdown
+        correction_trace.setdefault("resolved_factors", list(correction_apply_trace.get("resolved_factors") or []))
+        correction_trace.setdefault("resolved_set", str(correction_apply_trace.get("resolved_set") or ""))
+        correction_trace.setdefault("resolved_sets", list(correction_apply_trace.get("resolved_sets") or []))
+        correction_trace.setdefault("measurement_role", str(correction_apply_trace.get("measurement_role") or ""))
+        correction_trace.setdefault("apply_model", str(correction_apply_trace.get("apply_model") or ""))
+        correction_trace.setdefault("instrument_apply_status", str(correction_apply_trace.get("instrument_apply_status") or ""))
+        if str((correction_trace.get("correction_breakdown") or {}).get("storage_kind") or "") == "instrument_factor":
+            correction_trace["correction_applied"] = bool(correction_apply_trace.get("correction_applied"))
+        if str(correction_trace.get("reason") or "") in {"DISABLED", "MODE_OFF"} and correction_apply_trace.get("reason"):
+            correction_trace["reason"] = correction_apply_trace.get("reason")
         verdict = self.metadata_recorder.update_final_result(result_id=result_id, values=corrected_values)
         self.run_repo.update_result_correction_fields(result_id=result_id, correction_data=correction_trace)
-        self.run_repo.append_step_result(
-            project_id=project_id,
-            result_id=result_id,
-            step_name="CORRECTION_APPLY",
-            status="OK" if correction_trace.get("correction_applied") else "INFO",
-            data=correction_trace,
-        )
         return result_id, verdict
 
     def handle_reconfigure_prompt(
